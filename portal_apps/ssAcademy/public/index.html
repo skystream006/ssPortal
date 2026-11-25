@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en" data-theme="green" data-theme-mode="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>ssAcademy | Collections</title>
+  <link rel="icon" type="image/png" sizes="256x256" href="/icons/ssacademy.png">
+  <link rel="stylesheet" href="/ssacademy/assets/theme.css">
+  <link rel="stylesheet" href="/ssacademy/assets/style.css">
+  <script src="/ssacademy/assets/appearance.js"></script>
+  <script defer src="/ssacademy/assets/lucide.js"></script>
+  <script type="module" src="/ssacademy/assets/app.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="topbar"><div class="topbar-inner">
+    <a class="portal-link" href="/" title="Back to portal" aria-label="Back to portal"><i data-lucide="arrow-left"></i></a>
+    <a href="/ssacademy/" class="brand"><img class="brand-mark" src="/icons/ssacademy.png" alt="" width="36" height="36">ssAcademy</a>
+    <nav aria-label="ssAcademy views"><a href="#collections" data-view="collections" aria-current="page"><i data-lucide="library"></i>Collections</a><a href="#tokens" id="tokens-link" data-view="tokens" hidden><i data-lucide="key-round"></i>Upload tokens</a></nav>
+    <a href="/#account" class="account-link" title="Portal account"><i data-lucide="user-round"></i><span id="user-name"></span></a>
+  </div></header>
+  <main id="main">
+    <div class="breadcrumb"><span>SSACADEMY</span><i data-lucide="chevron-right"></i><span id="section-label">COLLECTIONS</span></div>
+    <div id="notice" class="notice" role="status" hidden></div>
+    <section id="collections-view" aria-labelledby="collections-title">
+      <div class="page-heading"><div><h1 id="collections-title">Collection exports<span>.</span></h1><p id="import-count">Loading records</p></div>
+        <div class="heading-actions"><button class="icon-button" id="refresh-imports" aria-label="Refresh imports" title="Refresh imports"><i data-lucide="refresh-cw"></i></button><button class="primary-button" id="open-import"><i data-lucide="upload"></i>Import data</button></div>
+      </div>
+      <div class="toolbar"><label class="search-field"><i data-lucide="search"></i><input type="search" id="search-imports" aria-label="Search imports" placeholder="Search source labels..."></label>
+        <label class="select-field"><i data-lucide="tablet-smartphone"></i><select id="source-filter" aria-label="Filter by source"><option value="">All sources</option></select></label>
+        <label class="checkbox-field" id="all-users-control" hidden><input id="all-users" type="checkbox">All users</label>
+      </div>
+      <div class="table-scroll"><table class="data-table" aria-label="Collection exports"><thead><tr><th>Source</th><th>Imported</th><th>Whole</th><th>Fragments</th><th>Animations</th><th><span class="sr-only">Details</span></th></tr></thead><tbody id="imports-body"></tbody></table></div>
+      <div id="imports-empty" class="empty-state" hidden><i data-lucide="book-open"></i><h2>No collection exports</h2></div>
+      <div class="pagination"><span id="page-summary">0 records</span><label>Rows<select id="page-size" aria-label="Rows per page"><option>25</option><option>50</option><option>100</option></select></label><button class="icon-button" id="previous-page" title="Previous page" aria-label="Previous page" disabled><i data-lucide="chevron-left"></i></button><button class="icon-button" id="next-page" title="Next page" aria-label="Next page" disabled><i data-lucide="chevron-right"></i></button></div>
+    </section>
+    <section id="tokens-view" aria-labelledby="tokens-title" hidden>
+      <div class="page-heading"><div><h1 id="tokens-title">App approvals<span>.</span></h1><p id="device-count">Mobile upload access</p></div><button id="refresh-tokens" class="icon-button" aria-label="Refresh app registrations" title="Refresh app registrations"><i data-lucide="refresh-cw"></i></button></div>
+      <div class="toolbar"><label class="search-field"><i data-lucide="search"></i><input id="search-devices" type="search" aria-label="Search app usernames" placeholder="Search usernames..."></label>
+        <label class="select-field"><i data-lucide="shield-check"></i><select id="device-status" aria-label="Filter app status"><option value="">All statuses</option><option value="pending">Pending approval</option><option value="approved">Approved</option><option value="revoked">Revoked</option><option value="expired">Expired</option></select></label></div>
+      <div class="table-scroll"><table class="data-table" aria-label="App registrations"><thead><tr><th>Username</th><th>Fingerprint ID</th><th>Status</th><th>Requested</th><th>Expires</th><th>Last used</th><th>Actions</th></tr></thead><tbody id="tokens-body"></tbody></table></div>
+      <div id="tokens-empty" class="empty-state" hidden><i data-lucide="smartphone"></i><h2>No app registrations</h2></div>
+      <div class="pagination"><span id="device-page-summary">0 apps</span><button class="icon-button" id="previous-device-page" title="Previous apps" aria-label="Previous apps" disabled><i data-lucide="chevron-left"></i></button><button class="icon-button" id="next-device-page" title="Next apps" aria-label="Next apps" disabled><i data-lucide="chevron-right"></i></button></div>
+    </section>
+    <footer><span><img src="/icons/ssacademy.png" alt="" width="15" height="15">ssAcademy<span class="version">v1.0.0</span></span><span>Collections schema v1</span></footer>
+  </main>
+
+  <dialog id="import-dialog" aria-labelledby="import-title">
+    <div class="dialog-heading"><h2 id="import-title">Import collection data</h2><button class="icon-button" data-close aria-label="Close import dialog" title="Close"><i data-lucide="x"></i></button></div>
+    <form id="import-form"><label class="field"><span>Source label</span><input id="import-source" required maxlength="80" autocomplete="off" placeholder="Learning tablet"></label>
+      <div class="field-heading"><label for="import-data">Export JSON</label><button id="choose-json" class="text-button" type="button"><i data-lucide="folder-open"></i>Read JSON file</button><input type="file" id="json-file" accept=".json,application/json" hidden></div>
+      <textarea id="import-data" aria-label="Export JSON" required spellcheck="false" placeholder='{"format":"ssAcademy-collections","version":1,"rewards":{},"pokemons":[]}'></textarea>
+      <div class="dialog-error notice" role="alert" hidden></div><div class="dialog-footer"><button type="button" class="text-button" data-close>Cancel</button><button class="primary-button" type="submit"><i data-lucide="database"></i>Import data</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="detail-dialog" class="wide-dialog" aria-labelledby="detail-title">
+    <div class="dialog-heading"><div><span class="eyebrow">COLLECTION SNAPSHOT</span><h2 id="detail-title"></h2></div><button class="icon-button" data-close aria-label="Close import details" title="Close"><i data-lucide="x"></i></button></div>
+    <dl class="detail-meta"><div><dt>Owner</dt><dd id="detail-owner"></dd></div><div><dt>Revision</dt><dd id="detail-revision"></dd></div><div><dt>Imported</dt><dd id="detail-date"></dd></div><div><dt>Last edited</dt><dd id="detail-edited"></dd></div><div><dt>Schema</dt><dd id="detail-schema"></dd></div><div class="checksum"><dt>Current SHA-256</dt><dd id="detail-checksum"></dd></div><div class="checksum" id="original-checksum-row" hidden><dt>Original import SHA-256</dt><dd id="detail-original-checksum"></dd></div></dl>
+    <div id="edit-saved" class="notice" role="status" hidden></div>
+    <div class="detail-columns" id="detail-read-view"><section><h3>Reward balances <span id="reward-count" class="count"></span></h3><div class="table-scroll"><table class="data-table rewards-table" aria-label="Reward balances"><thead><tr><th>Reward</th><th>Tier</th><th>Whole</th><th>Fragments</th></tr></thead><tbody id="rewards-body"></tbody></table></div></section>
+      <section><h3>Collected animations <span id="animation-count" class="count"></span></h3><label class="search-field"><i data-lucide="search"></i><input id="search-animations" type="search" aria-label="Search animations" placeholder="Search animations..."></label><ul id="animations-list" class="animations-list" aria-label="Collected animations"></ul></section></div>
+    <form id="edit-form" hidden><h3 class="edit-heading">Reward balances</h3><div class="table-scroll"><table class="data-table edit-table" aria-label="Edit reward balances"><thead><tr><th>Reward</th><th>Tier</th><th>Whole</th><th>Fragments</th></tr></thead><tbody id="edit-rewards-body"></tbody></table></div>
+      <label class="field animation-editor"><span>Animation IDs</span><textarea id="edit-animations" aria-label="Animation IDs" spellcheck="false" placeholder="PIKACHU&#10;BULBASAUR"></textarea></label>
+      <div class="dialog-footer"><button type="button" class="text-button" id="cancel-edit">Cancel edits</button><button class="primary-button" type="submit"><i data-lucide="save"></i>Save changes</button></div>
+    </form>
+    <div class="dialog-error notice" role="alert" hidden></div><div class="dialog-footer" id="detail-read-actions"><div class="detail-actions"><button id="delete-import" class="danger-button" type="button"><i data-lucide="trash-2"></i>Delete import</button><button id="edit-values" class="secondary-button" type="button" hidden><i data-lucide="pencil"></i>Edit values</button></div><button class="primary-button" data-close type="button">Done</button></div>
+  </dialog>
+
+  <dialog id="confirm-dialog" aria-labelledby="confirm-title"><div class="dialog-heading"><h2 id="confirm-title"></h2><button class="icon-button" data-close aria-label="Close confirmation" title="Close"><i data-lucide="x"></i></button></div><p id="confirm-message"></p><div class="dialog-error notice" role="alert" hidden></div><div class="dialog-footer"><button class="text-button" data-close type="button">Cancel</button><button class="danger-button" id="confirm-action" type="button"><i data-lucide="trash-2"></i><span>Delete</span></button></div></dialog>
+
+  <template id="import-row"><tr><td><button class="source-button" type="button" data-details><span class="source-icon"><i data-lucide="tablet-smartphone"></i></span><span class="source-text"><strong data-source></strong><small data-owner hidden></small></span></button></td><td data-date></td><td data-whole class="number"></td><td data-fragments class="number"></td><td data-animations class="number"></td><td><button class="icon-button" data-details type="button"><i data-lucide="arrow-up-right"></i></button></td></tr></template>
+  <template id="token-row"><tr><td><strong data-username></strong><small class="device-account" data-account></small></td><td><code data-fingerprint></code></td><td><span class="device-status" data-status></span></td><td data-created></td><td data-expires></td><td data-used></td><td><div class="device-actions"><button class="icon-button" type="button" data-approve><i data-lucide="user-check"></i></button><button class="icon-button danger" type="button" data-revoke><i data-lucide="user-x"></i></button><button class="icon-button danger" type="button" data-delete><i data-lucide="trash-2"></i></button></div></td></tr></template>
+</body>
+</html>

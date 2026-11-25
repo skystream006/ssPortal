@@ -1,14 +1,14 @@
 services:
   gateway:
     environment:
-      PORTAL_ADDRESS: "https://${PORTAL_HOST:?Set PORTAL_HOST to your public hostname}"
-      PUBLIC_ORIGIN: "https://${PORTAL_HOST:?Set PORTAL_HOST to your public hostname}"
+      PORTAL_ADDRESS: "https://${PASSKEY_RP_ID:?Set PASSKEY_RP_ID to your public hostname}"
+      PUBLIC_ORIGIN: "https://${PASSKEY_RP_ID:?Set PASSKEY_RP_ID to your public hostname}"
       HTTPS_MODE: public
     ports: !override
-      - "${PORTAL_BIND:-127.0.0.1}:80:80"
-      - "${PORTAL_BIND:-127.0.0.1}:443:443"
-      - "${PORTAL_BIND:-127.0.0.1}:443:443/udp"
+      - "${DOCKER_BIND_ADDRESS:-127.0.0.1}:80:80"
+      - "${DOCKER_BIND_ADDRESS:-127.0.0.1}:443:443"
+      - "${DOCKER_BIND_ADDRESS:-127.0.0.1}:443:443/udp"
 
   portal:
     environment:
-      PASSKEY_ORIGIN: "https://${PORTAL_HOST:?Set PORTAL_HOST to your public hostname}"
+      PASSKEY_ORIGIN: "https://${PASSKEY_RP_ID:?Set PASSKEY_RP_ID to your public hostname}"

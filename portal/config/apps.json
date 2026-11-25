@@ -10,7 +10,7 @@
     "icon": "shopping-basket",
     "color": "green",
     "runtime": "PHP 8.5 / SQLite",
-    "source": "grocy/"
+    "source": "portal_apps/grocy/"
   },
   {
     "id": "webtrees",
@@ -23,6 +23,19 @@
     "icon": "network",
     "color": "blue",
     "runtime": "PHP 8.5 / SQLite or MySQL",
-    "source": "webtrees/"
+    "source": "portal_apps/webtrees/"
+  },
+  {
+    "id": "ssacademy",
+    "name": "ssAcademy",
+    "description": "Collection exports, reward balances, and collected animations.",
+    "category": "Education",
+    "path": "/ssacademy/",
+    "apiPath": "/ssacademy/api/",
+    "healthUrl": "http://ssacademy:3100/ssacademy/health",
+    "icon": "book-open",
+    "color": "amber",
+    "runtime": "Node.js / SQLite",
+    "source": "portal_apps/ssAcademy/"
   }
 ]

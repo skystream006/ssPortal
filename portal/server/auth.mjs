@@ -89,6 +89,49 @@ export async function registerAuth(server, { store, config, apps, webauthn = sim
   });
   const objectBody = (properties = {}, required = []) => ({ type: 'object', additionalProperties: false, properties, required });
 
+  const deviceBody = objectBody({ username: nameSchema, fingerprintToken: { type: 'string', minLength: 32, maxLength: 256, pattern: '^[A-Za-z0-9_-]+$' } }, ['username', 'fingerprintToken']);
+  const deviceRequestOptions = {
+    bodyLimit: 1024, schema: { body: deviceBody },
+    config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
+    preHandler: async (request) => { if (request.headers.origin !== undefined) await requireOrigin(request); },
+  };
+  const deviceStatus = ({ id, username, fingerprint, status, expiresAt }) => ({ id, username, fingerprint, status, expiresAt });
+
+  server.post('/api/portal/integrations/ssacademy/devices/register', deviceRequestOptions, async (request, reply) => {
+    const result = store.registerAcademyDevice(request.body.username, request.body.fingerprintToken);
+    return reply.code(result.created ? 202 : 200).send({ device: deviceStatus(result.device) });
+  });
+
+  server.post('/api/portal/integrations/ssacademy/devices/status', deviceRequestOptions, async (request) => ({
+    device: deviceStatus(store.getAcademyDeviceStatus(request.body.username, request.body.fingerprintToken)),
+  }));
+
+  server.get('/api/portal/integrations/ssacademy/identity', { config: { rateLimit: { max: 300, timeWindow: '1 minute' } } }, async (request) => {
+    let user = request.user;
+    let authType = 'session';
+    if (request.headers.authorization !== undefined) {
+      const token = /^Bearer ([A-Za-z0-9_-]{32,256})$/.exec(request.headers.authorization)?.[1];
+      user = store.getAcademyDeviceUser(token);
+      authType = 'device-token';
+    }
+    if (!user) throw authError(401, 'A portal session or approved ssAcademy app token is required.', 'SIGN_IN_REQUIRED');
+    return { user: { id: user.id, name: user.name, role: user.role }, authType, origin: config.origin };
+  });
+
+  server.get('/api/portal/integrations/ssacademy/tokens', { preHandler: requireAdmin }, async (request) => {
+    if (Object.keys(request.query).some((key) => !['status', 'search', 'page', 'pageSize'].includes(key))) throw authError(400, 'Unknown app filter.');
+    return store.listAcademyDevices(request.user.id, request.query);
+  });
+
+  server.patch('/api/portal/integrations/ssacademy/tokens/:id', routeOptions(objectBody({ status: { enum: ['approved', 'revoked'] } }, ['status']), requireAdmin), async (request) => {
+    return { device: store.updateAcademyDevice(request.user.id, request.params.id, request.body.status) };
+  });
+
+  server.delete('/api/portal/integrations/ssacademy/tokens/:id', { preHandler: [requireOrigin, requireAdmin] }, async (request, reply) => {
+    store.deleteAcademyDevice(request.user.id, request.params.id);
+    return reply.code(204).send();
+  });
+
   async function registrationOptions(name, userHandle, excludeCredentials = []) {
     return webauthn.generateRegistrationOptions({
       rpName: 'ssPortal', rpID: config.rpID, userName: name, userDisplayName: name,

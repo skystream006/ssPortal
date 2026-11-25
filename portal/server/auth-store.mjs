@@ -23,6 +23,13 @@ function credentialName(value = 'Passkey') {
   return value.trim();
 }
 
+function academyFingerprintHash(value) {
+  if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{32,256}$/.test(value)) {
+    throw authError(400, 'fingerprintToken must contain 32-256 letters, digits, underscores, or hyphens.');
+  }
+  return createHash('sha256').update(value).digest('hex');
+}
+
 export function createAuthStore({ path = ':memory:', now = Date.now, sessionDays = 30 } = {}) {
   if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const database = new DatabaseSync(path);
@@ -56,6 +63,16 @@ export function createAuthStore({ path = ':memory:', now = Date.now, sessionDays
       token_hash TEXT PRIMARY KEY, kind TEXT NOT NULL,
       user_id TEXT REFERENCES users(id) ON DELETE CASCADE, expires_at INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS academy_devices (
+      id TEXT PRIMARY KEY, token_hash TEXT NOT NULL UNIQUE,
+      username TEXT NOT NULL, username_key TEXT NOT NULL,
+      user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
+      status TEXT NOT NULL CHECK(status IN ('pending', 'approved', 'revoked')),
+      created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+      approved_at INTEGER, approved_by TEXT, expires_at INTEGER, last_used_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS academy_devices_user ON academy_devices(user_id);
+    CREATE INDEX IF NOT EXISTS academy_devices_username ON academy_devices(username_key);
   `);
 
   function transaction(action) {
@@ -180,6 +197,7 @@ export function createAuthStore({ path = ':memory:', now = Date.now, sessionDays
       if (role !== user.role || status !== user.status) {
         database.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId);
         database.prepare('DELETE FROM enrollment_tokens WHERE user_id = ?').run(userId);
+        database.prepare("UPDATE academy_devices SET status = 'revoked', updated_at = ? WHERE user_id = ?").run(now(), userId);
       }
       return getUser(userId);
     });
@@ -293,9 +311,110 @@ export function createAuthStore({ path = ':memory:', now = Date.now, sessionDays
       consumeEnrollmentCode(tokenHash, 'recovery', userId);
       database.prepare('DELETE FROM credentials WHERE user_id = ?').run(userId);
       database.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId);
+      database.prepare("UPDATE academy_devices SET status = 'revoked', updated_at = ? WHERE user_id = ?").run(now(), userId);
       insertCredential(userId, credential, name);
       return getUser(userId);
     });
+  }
+
+  function academyDevice(record) {
+    const matchedUser = record.user_id ?? database.prepare('SELECT id FROM users WHERE name_key = ?').get(record.username_key)?.id;
+    const user = matchedUser ? getUser(matchedUser) : null;
+    const status = record.status === 'approved' && record.expires_at <= now() ? 'expired' : record.status;
+    return {
+      id: record.id, username: record.username, userId: record.user_id,
+      accountName: user?.name ?? null, accountStatus: user?.status ?? null,
+      fingerprint: record.token_hash.slice(0, 16), status,
+      createdAt: record.created_at, updatedAt: record.updated_at,
+      approvedAt: record.approved_at, approvedBy: record.approved_by,
+      expiresAt: record.expires_at, lastUsedAt: record.last_used_at,
+    };
+  }
+
+  function registerAcademyDevice(username, fingerprintToken) {
+    const name = normalizeName(username);
+    const nameKey = name.toLowerCase();
+    const tokenHash = academyFingerprintHash(fingerprintToken);
+    return transaction(() => {
+      const existing = database.prepare('SELECT * FROM academy_devices WHERE token_hash = ?').get(tokenHash);
+      if (existing) {
+        if (existing.username_key !== nameKey) throw authError(409, 'This app token is already registered to a different username.');
+        return { created: false, device: academyDevice(existing) };
+      }
+      if (database.prepare('SELECT count(*) AS count FROM academy_devices').get().count >= 2000
+        || database.prepare('SELECT count(*) AS count FROM academy_devices WHERE username_key = ?').get(nameKey).count >= 20) {
+        throw authError(429, 'The app registration limit has been reached. Contact an administrator.');
+      }
+      const user = database.prepare('SELECT id FROM users WHERE name_key = ?').get(nameKey);
+      const id = randomUUID();
+      const timestamp = now();
+      database.prepare(`INSERT INTO academy_devices (id, token_hash, username, username_key, user_id, status, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)`).run(id, tokenHash, name, nameKey, user?.id ?? null, timestamp, timestamp);
+      return { created: true, device: academyDevice(database.prepare('SELECT * FROM academy_devices WHERE id = ?').get(id)) };
+    });
+  }
+
+  function getAcademyDeviceStatus(username, fingerprintToken) {
+    const nameKey = normalizeName(username).toLowerCase();
+    const tokenHash = academyFingerprintHash(fingerprintToken);
+    const record = database.prepare('SELECT * FROM academy_devices WHERE token_hash = ? AND username_key = ?').get(tokenHash, nameKey);
+    if (!record) throw authError(404, 'App registration not found.');
+    return academyDevice(record);
+  }
+
+  function listAcademyDevices(actorId, { status = '', search = '', page = 1, pageSize = 50 } = {}) {
+    requireAdmin(actorId);
+    const pageNumber = Number(page);
+    const size = Number(pageSize);
+    if (!['', 'pending', 'approved', 'revoked', 'expired'].includes(status) || typeof search !== 'string' || search.length > 100
+      || !Number.isInteger(pageNumber) || pageNumber < 1 || pageNumber > 10000 || !Number.isInteger(size) || size < 1 || size > 100) {
+      throw authError(400, 'Invalid device filters or pagination.');
+    }
+    const pattern = `%${search.replaceAll('!', '!!').replaceAll('%', '!%').replaceAll('_', '!_')}%`;
+    const where = ` WHERE username LIKE ? ESCAPE '!' AND (? = '' OR
+      CASE WHEN status = 'approved' AND expires_at <= ? THEN 'expired' ELSE status END = ?)`;
+    const values = [pattern, status, now(), status];
+    const total = database.prepare(`SELECT count(*) AS count FROM academy_devices${where}`).get(...values).count;
+    const records = database.prepare(`SELECT * FROM academy_devices${where} ORDER BY created_at DESC, id LIMIT ? OFFSET ?`)
+      .all(...values, size, (pageNumber - 1) * size);
+    return { devices: records.map(academyDevice), total, page: pageNumber, pageSize: size };
+  }
+
+  function updateAcademyDevice(actorId, id, status) {
+    return transaction(() => {
+      requireAdmin(actorId);
+      if (!['approved', 'revoked'].includes(status)) throw authError(400, 'Choose approved or revoked access.');
+      const record = database.prepare('SELECT * FROM academy_devices WHERE id = ?').get(id);
+      if (!record) throw authError(404, 'App registration not found.');
+      if (status === 'approved') {
+        const userId = record.user_id ?? database.prepare('SELECT id FROM users WHERE name_key = ?').get(record.username_key)?.id;
+        if (!userId) throw authError(409, 'Create and approve the named portal account before approving this app.');
+        requireApproved(userId);
+        if (record.status === 'approved' && record.expires_at > now()) return academyDevice(record);
+        const timestamp = now();
+        database.prepare(`UPDATE academy_devices SET user_id = ?, status = 'approved', updated_at = ?, approved_at = ?, approved_by = ?, expires_at = ? WHERE id = ?`)
+          .run(userId, timestamp, timestamp, actorId, timestamp + 90 * 86_400_000, id);
+      } else {
+        database.prepare("UPDATE academy_devices SET status = 'revoked', updated_at = ? WHERE id = ?").run(now(), id);
+      }
+      return academyDevice(database.prepare('SELECT * FROM academy_devices WHERE id = ?').get(id));
+    });
+  }
+
+  function getAcademyDeviceUser(fingerprintToken) {
+    let tokenHash;
+    try { tokenHash = academyFingerprintHash(fingerprintToken); } catch { return null; }
+    const record = database.prepare("SELECT id, user_id FROM academy_devices WHERE token_hash = ? AND status = 'approved' AND expires_at > ?")
+      .get(tokenHash, now());
+    const user = record?.user_id ? getUser(record.user_id) : null;
+    if (user?.status !== 'approved') return null;
+    database.prepare('UPDATE academy_devices SET last_used_at = ? WHERE id = ?').run(now(), record.id);
+    return user;
+  }
+
+  function deleteAcademyDevice(actorId, id) {
+    requireAdmin(actorId);
+    if (database.prepare('DELETE FROM academy_devices WHERE id = ?').run(id).changes !== 1) throw authError(404, 'App registration not found.');
   }
 
   return {
@@ -307,5 +426,6 @@ export function createAuthStore({ path = ':memory:', now = Date.now, sessionDays
     deleteSession: (token) => { if (typeof token === 'string') database.prepare('DELETE FROM sessions WHERE token_hash = ?').run(hashToken(token)); },
     revokeSessions: (actorId, userId) => { requireAdmin(actorId); requireApproved(userId); database.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId); },
     issueEnrollmentCode, checkEnrollmentCode, recoverAccount, rememberChallenge, takeChallenge,
+    registerAcademyDevice, getAcademyDeviceStatus, listAcademyDevices, updateAcademyDevice, getAcademyDeviceUser, deleteAcademyDevice,
   };
 }

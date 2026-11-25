@@ -1,11 +1,15 @@
-PORTAL_BIND=127.0.0.1
-PORTAL_PORT=8080
-PORTAL_HOST=localhost
-HTTPS_WEB_PORT=4125
-HTTPS_MODE=local
-HTTPS_KEY_PATH=
-HTTPS_CERT_PATH=
-PASSKEY_ORIGIN=
+# Host interface; blank binds to 127.0.0.1. Use a LAN IP or 0.0.0.0 for network access.
+DOCKER_BIND_ADDRESS=
+# Host HTTP redirect port; blank uses 8080.
+WEB_API_PORT=
+# Host HTTPS port (TCP and UDP/HTTP3); blank uses 4125.
+HTTPS_WEB_PORT=
+# Public/certificate hostname without a scheme, port, or path; blank uses localhost.
 PASSKEY_RP_ID=
-ALLOW_REGISTRATION=true
+# Exact browser-facing HTTPS origin, including non-443 ports and no path.
+# Blank uses https://<PASSKEY_RP_ID or localhost>:<HTTPS_WEB_PORT or 4125>.
+PASSKEY_ORIGIN=
+# Login session lifetime in days, from 1 to 90.
 SESSION_DAYS=30
+# Reserved for PostgreSQL integrations; unused by this SQLite-based stack.
+POSTGRES_PASSWORD=

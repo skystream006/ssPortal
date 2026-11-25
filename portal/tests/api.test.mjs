@@ -16,9 +16,10 @@ test('portal API exposes safe same-origin app metadata with independent health s
     assert.equal(response.statusCode, 200);
     assert.equal(response.headers['cache-control'], 'no-store');
     const result = response.json();
-    assert.equal(result.apps.length, 2);
+    assert.equal(result.apps.length, 3);
     assert.equal(result.apps[0].path, '/grocy/');
     assert.equal(result.apps[1].path, '/webtrees/');
+    assert.equal(result.apps[2].path, '/ssacademy/');
     assert.equal(result.apps[0].health.state, 'online');
     assert.ok(result.server.memoryMb > 0);
     assert.equal(response.body.includes('healthUrl'), false);

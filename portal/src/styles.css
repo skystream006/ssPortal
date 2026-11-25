@@ -61,6 +61,7 @@ h1 { font: 500 38px/1.2 'Space Grotesk Variable', sans-serif; overflow-wrap: any
 .view-control button { border: 0; width: 31px; height: 28px; display: grid; place-items: center; background: transparent; color: var(--muted); border-radius: 3px; }
 .view-control button[aria-pressed="true"] { background: var(--raised); color: var(--accent); }
 .library-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 21px; }
+.library-toolbar .view-control { flex-shrink: 0; margin-left: auto; }
 .search-field { display: flex; align-items: center; gap: 10px; min-width: 0; height: 42px; flex: 1; background: var(--surface); border: 1px solid var(--line); border-radius: 5px; padding: 0 12px; color: var(--muted); }
 .search-field:focus-within { border-color: var(--accent); }
 .search-field input { border: 0; outline: 0; color: var(--ink); background: transparent; width: 100%; min-width: 0; height: 100%; font-size: 12px; }
@@ -79,6 +80,9 @@ h1 { font: 500 38px/1.2 'Space Grotesk Variable', sans-serif; overflow-wrap: any
 .app-card { position: relative; border: 1px solid var(--line); border-top: 3px solid color-mix(in srgb, var(--app-color) 70%, var(--surface)); border-radius: 7px; background: var(--surface); padding: 23px 24px 0; min-width: 0; animation: enter .35s ease-out both; }
 .app-card:nth-child(2) { animation-delay: .06s; }
 .app-card:hover { border-color: color-mix(in srgb, var(--app-color) 45%, var(--line)); }
+.app-card .launch-link::after { content: ''; position: absolute; inset: 0; z-index: 1; border-radius: 6px; }
+.app-card .launch-link:focus-visible::after { outline: 2px solid var(--accent); outline-offset: 3px; }
+.app-card .icon-button { position: relative; z-index: 2; }
 .card-heading { display: flex; align-items: center; gap: 14px; }
 .app-icon { display: grid; place-items: center; width: 62px; height: 62px; flex-shrink: 0; background: var(--app-surface); color: var(--app-color); border: 1px solid color-mix(in srgb, var(--app-color) 12%, transparent); border-radius: 7px; }
 .app-icon img { display: block; object-fit: contain; }
@@ -111,18 +115,6 @@ h1 { font: 500 38px/1.2 'Space Grotesk Variable', sans-serif; overflow-wrap: any
 .list-layout .card-status { display: flex; align-items: flex-start; flex-direction: column; padding: 0; gap: 7px; }
 .list-layout .card-footer { min-height: 40px; border: 0; }
 .list-layout .card-tools > span { display: none; }
-.recent-section { margin-top: 33px; }
-.recent-empty { display: flex; align-items: center; gap: 13px; padding: 19px 0; border-block: 1px solid var(--line); color: var(--muted); font-size: 12px; }
-.recent-symbol { display: grid; place-items: center; width: 36px; height: 36px; border: 1px dashed var(--line); border-radius: 6px; }
-.recent-empty > .muted { margin-left: auto; font-size: 10px; }
-.recent-list { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
-.recent-list li { border-bottom: 1px solid var(--line); }
-.recent-list a { display: flex; align-items: center; gap: 12px; padding: 14px 0; }
-.recent-list a:hover strong { color: var(--accent); }
-.recent-list strong { font-size: 12px; font-weight: 650; }
-.recent-list small { display: block; margin-top: 3px; color: var(--muted); font: 10px Consolas, monospace; }
-.recent-list time { margin-left: auto; color: var(--muted); font-size: 10px; }
-.recent-list a > svg { color: var(--muted); margin-left: 12px; }
 .page-footer { display: flex; justify-content: space-between; gap: 16px; padding: 32px 0 10px; color: var(--muted); font-size: 10px; }
 .page-footer > span { display: flex; align-items: center; gap: 7px; }
 .footer-version { margin-left: 8px; font: 10px Consolas, monospace; }
@@ -264,6 +256,9 @@ h1 { font: 500 38px/1.2 'Space Grotesk Variable', sans-serif; overflow-wrap: any
   .host-metric strong { font-size: 12px; margin: 0; }
   .library-toolbar { flex-wrap: wrap; gap: 9px; }
   .search-field { flex-basis: 100%; }
+  .library-toolbar .search-field { flex-basis: calc(100% - 86px); }
+  .library-toolbar .view-control { order: 1; }
+  .library-toolbar .filter-field { order: 2; min-width: 150px; }
   .filter-field { flex: 1; }
   .filter-field select { width: 100%; min-width: 0; }
   .application-grid { gap: 16px; }
@@ -312,6 +307,5 @@ h1 { font: 500 38px/1.2 'Space Grotesk Variable', sans-serif; overflow-wrap: any
   .details-list dd { max-width: 63%; }
   .notice { align-items: flex-start; flex-wrap: wrap; }
   .notice .text-button { margin-left: 28px; }
-  .recent-list time { max-width: 90px; text-align: right; line-height: 1.7; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }

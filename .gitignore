@@ -1,5 +1,5 @@
-grocy/
-webtrees/
+/portal_apps/grocy/
+/portal_apps/webtrees/
 .env
 .env.*
 !.envexample

@@ -16,27 +16,27 @@ CMD ["apache2-foreground"]
 FROM node:24-alpine AS grocy-assets
 WORKDIR /build
 RUN apk add --no-cache git
-COPY grocy/package*.json ./
+COPY portal_apps/grocy/package*.json ./
 RUN npm install --omit=dev --ignore-scripts --legacy-peer-deps --no-audit --no-fund
 
 FROM node:24-alpine AS webtrees-assets
 WORKDIR /build
-COPY webtrees/package*.json ./
+COPY portal_apps/webtrees/package*.json ./
 RUN npm install --no-audit --no-fund
-COPY webtrees/webpack.config.js ./
-COPY webtrees/resources ./resources
+COPY portal_apps/webtrees/webpack.config.js ./
+COPY portal_apps/webtrees/resources ./resources
 RUN npm run build
 
 FROM php-runtime AS grocy-source
 COPY --from=composer:2 /usr/bin/composer /usr/local/bin/composer
 WORKDIR /build
-COPY grocy/ ./
+COPY portal_apps/grocy/ ./
 RUN composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader --no-progress --no-scripts
 
 FROM php-runtime AS webtrees-source
 COPY --from=composer:2 /usr/bin/composer /usr/local/bin/composer
 WORKDIR /build
-COPY webtrees/ ./
+COPY portal_apps/webtrees/ ./
 RUN composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader --no-progress --no-scripts \
     && php index.php dev:compile-po-files --no-interaction
 

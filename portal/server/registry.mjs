@@ -42,7 +42,7 @@ export function validateApps(input) {
       path: application.path,
       apiPath: application.apiPath ?? null,
       healthUrl: application.healthUrl ?? null,
-      icon: ['shopping-basket', 'network', 'app-window', 'music', 'folder'].includes(application.icon)
+      icon: ['shopping-basket', 'network', 'app-window', 'music', 'folder', 'book-open'].includes(application.icon)
         ? application.icon : 'app-window',
       color: ['green', 'blue', 'pink', 'amber'].includes(application.color) ? application.color : 'green',
       runtime: application.runtime,

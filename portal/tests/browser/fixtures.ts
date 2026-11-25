@@ -51,7 +51,7 @@ export const test = base.extend<{ portal: Portal; authenticator: Authenticator; 
       await page.getByLabel('Username', { exact: true }).fill('Test administrator');
       await page.getByLabel('Server setup code', { exact: true }).fill(portal.setupCode);
       await page.getByRole('button', { name: 'Create passkey', exact: true }).click();
-      await expect(page.getByRole('heading', { name: 'Your applications.' })).toBeVisible();
+      await expect(page.getByRole('heading', { name: 'Application library.', level: 1 })).toBeVisible();
       expect(authenticator.id).toBeTruthy();
     }
     await use();

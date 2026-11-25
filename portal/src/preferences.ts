@@ -35,10 +35,3 @@ export function readFavorites(userId: string): string[] {
   const saved = readStored(`${userId}.favorites`);
   return Array.isArray(saved) ? saved.filter((value): value is string => typeof value === 'string').slice(0, 50) : [];
 }
-
-export type Visit = { id: string; at: string };
-export function readVisits(userId: string): Visit[] {
-  const saved = readStored(`${userId}.visits`);
-  return Array.isArray(saved) ? saved.filter((entry): entry is Visit => entry && typeof entry.id === 'string'
-    && typeof entry.at === 'string' && Number.isFinite(Date.parse(entry.at))).slice(0, 5) : [];
-}

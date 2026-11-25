@@ -22,3 +22,12 @@ export function recoveryForUser(store, name) {
   if (!user) throw new Error('Test user not found.');
   return store.issueEnrollmentCode('recovery', user.id);
 }
+
+export function createMemberSession(store, actorId, name) {
+  const user = store.registerUser({
+    name, userHandle: randomBytes(32).toString('base64url'),
+    credential: { id: randomBytes(24).toString('base64url'), publicKey: new Uint8Array([1, 2, 3]), counter: 0 },
+  });
+  store.updateUser(actorId, user.id, { status: 'approved' });
+  return { userId: String(user.id), token: store.createSession(user.id).token };
+}

@@ -2,6 +2,7 @@
   admin off
   auto_https disable_redirects
   skip_install_trust
+  import /config/portal-bind-global.caddy
 }
 
 (portal_session) {
@@ -26,6 +27,9 @@ http://:80 {
   @webtrees_root path /webtrees
   redir @webtrees_root /webtrees/?{query} 308
 
+  @ssacademy_root path /ssacademy
+  redir @ssacademy_root /ssacademy/?{query} 308
+
   handle /healthz {
     respond "ok" 200
   }
@@ -40,6 +44,10 @@ http://:80 {
     reverse_proxy webtrees:80
   }
 
+  handle /ssacademy/* {
+    reverse_proxy ssacademy:3100
+  }
+
   handle {
     reverse_proxy {$PORTAL_UPSTREAM:portal:3000}
   }
@@ -48,3 +56,5 @@ http://:80 {
 http://:2015 {
   respond /healthz "ok" 200
 }
+
+import /config/portal-bind.caddy

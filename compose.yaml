@@ -6,15 +6,16 @@ services:
     restart: unless-stopped
     entrypoint: ["/bin/sh", "/etc/caddy/gateway-entrypoint.sh"]
     environment:
-      PORTAL_ADDRESS: "https://${PORTAL_HOST:-localhost}"
-      PUBLIC_ORIGIN: "${PASSKEY_ORIGIN:-https://${PORTAL_HOST:-localhost}:${HTTPS_WEB_PORT:-4125}}"
+      DOCKER_BIND_ADDRESS: "${DOCKER_BIND_ADDRESS:-127.0.0.1}"
+      PORTAL_ADDRESS: "https://${PASSKEY_RP_ID:-localhost}"
+      PUBLIC_ORIGIN: "${PASSKEY_ORIGIN:-https://${PASSKEY_RP_ID:-localhost}:${HTTPS_WEB_PORT:-4125}}"
       HTTPS_MODE: "${HTTPS_MODE:-local}"
       HTTPS_KEY_PATH: "${HTTPS_KEY_PATH:-}"
       HTTPS_CERT_PATH: "${HTTPS_CERT_PATH:-}"
     ports:
-      - "${PORTAL_BIND:-127.0.0.1}:${PORTAL_PORT:-8080}:80"
-      - "${PORTAL_BIND:-127.0.0.1}:${HTTPS_WEB_PORT:-4125}:443"
-      - "${PORTAL_BIND:-127.0.0.1}:${HTTPS_WEB_PORT:-4125}:443/udp"
+      - "${DOCKER_BIND_ADDRESS:-127.0.0.1}:${WEB_API_PORT:-8080}:80"
+      - "${DOCKER_BIND_ADDRESS:-127.0.0.1}:${HTTPS_WEB_PORT:-4125}:443"
+      - "${DOCKER_BIND_ADDRESS:-127.0.0.1}:${HTTPS_WEB_PORT:-4125}:443/udp"
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
       - ./deploy/gateway-entrypoint.sh:/etc/caddy/gateway-entrypoint.sh:ro
@@ -27,6 +28,8 @@ services:
       grocy:
         condition: service_started
       webtrees:
+        condition: service_started
+      ssacademy:
         condition: service_started
     networks:
       - applications
@@ -53,7 +56,7 @@ services:
       PORT: 3000
       NODE_ENV: production
       AUTH_DB_PATH: /app/data/auth.sqlite
-      PASSKEY_ORIGIN: "${PASSKEY_ORIGIN:-https://${PORTAL_HOST:-localhost}:${HTTPS_WEB_PORT:-4125}}"
+      PASSKEY_ORIGIN: "${PASSKEY_ORIGIN:-https://${PASSKEY_RP_ID:-localhost}:${HTTPS_WEB_PORT:-4125}}"
       PASSKEY_RP_ID: "${PASSKEY_RP_ID:-}"
       ALLOW_REGISTRATION: "${ALLOW_REGISTRATION:-true}"
       SESSION_DAYS: "${SESSION_DAYS:-30}"
@@ -71,6 +74,42 @@ services:
       - applications
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/portal/health').then(response => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  ssacademy:
+    build:
+      context: .
+      dockerfile: portal_apps/ssAcademy/Dockerfile
+    restart: unless-stopped
+    init: true
+    environment:
+      HOST: 0.0.0.0
+      PORT: 3100
+      ACADEMY_DB_PATH: /app/data/academy.sqlite
+      PORTAL_INTERNAL_URL: http://portal:3000
+    depends_on:
+      portal:
+        condition: service_started
+    volumes:
+      - ssacademy_data:/app/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - applications
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3100/ssacademy/health').then(response => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -148,5 +187,6 @@ volumes:
   gateway_data:
   gateway_config:
   portal_data:
+  ssacademy_data:
   grocy_data:
   webtrees_data:

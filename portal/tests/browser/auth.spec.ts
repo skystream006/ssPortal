@@ -6,7 +6,7 @@ test('approved sessions resume app deep links but never external redirects', asy
   await page.goto('/?returnTo=%2Fgrocy%2Fshoppinglist');
   await expect(page).toHaveURL(/\/grocy\/shoppinglist$/);
   await page.goto('/?returnTo=%2F%2Fevil.example%2F');
-  await expect(page.getByRole('heading', { name: 'Your applications.' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Application library.', level: 1 })).toBeVisible();
   expect(new URL(page.url()).hostname).toBe('localhost');
   expect(new URL(page.url()).search).toBe('');
 });
@@ -21,7 +21,7 @@ test('passkey login creates an HttpOnly session and logout invalidates it', asyn
   expect((await page.request.get('/api/portal/apps')).status()).toBe(401);
   await page.bringToFront();
   await page.getByRole('button', { name: 'Sign in with passkey' }).click();
-  await expect(page.getByRole('heading', { name: 'Your applications.' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Application library.', level: 1 })).toBeVisible();
   const after = (await page.context().cookies()).find((cookie) => cookie.name === 'ssportal_session')!;
   expect(after.value).not.toBe(before.value);
 });
@@ -76,7 +76,7 @@ test('administrators approve, change roles, revoke access, and delete accounts w
 
     await memberPage.bringToFront();
     await memberPage.getByRole('button', { name: 'Check approval' }).click();
-    await expect(memberPage.getByRole('heading', { name: 'Your applications.' })).toBeVisible();
+    await expect(memberPage.getByRole('heading', { name: 'Application library.', level: 1 })).toBeVisible();
     await expect(memberPage.getByRole('link', { name: 'Users', exact: true })).toHaveCount(0);
     expect((await memberPage.request.get('/api/portal/admin/users')).status()).toBe(403);
 
@@ -119,7 +119,7 @@ test('operator-issued recovery enrolls a new verified passkey and invalidates th
   await page.getByRole('button', { name: 'Recover account', exact: true }).click();
   await page.getByLabel('Recovery code', { exact: true }).fill(recovery.token);
   await page.getByRole('button', { name: 'Create recovery passkey', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Your applications.' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Application library.', level: 1 })).toBeVisible();
   expect(portal.store.findCredential(oldKey)).toBeNull();
   expect(() => portal.store.checkEnrollmentCode(recovery.token, 'recovery')).toThrow();
   expect(portal.store.getPasskeys(owner.id)).toHaveLength(1);

@@ -1,6 +1,6 @@
 # ssPortal
 
-A Dockerized, single-host application workspace for Grocy, webtrees, and future HTTP applications. The portal includes passkey sign-in, user approval and administration, live availability, search, categories, per-user favorites and recent launches, grid/list layouts, and seven themes with light, dark, and system modes.
+A Dockerized, single-host application workspace for Grocy, webtrees, ssAcademy, and future HTTP applications. The portal includes passkey sign-in, user approval and administration, live availability, search, categories, per-user favorites, grid/list layouts, and seven themes with light, dark, and system modes.
 
 ## Architecture
 
@@ -16,6 +16,7 @@ Browser: https://localhost:4125
              +-- /grocy/            Grocy: PHP 8.5 + Apache + SQLite
              |     +-- api/         Grocy's own authenticated API
              +-- /webtrees/         webtrees: PHP 8.5 + Apache
+             +-- /ssacademy/        Collection data viewer + JSON API + SQLite
 ```
 
 | Component | Choice | Reason |
@@ -28,13 +29,13 @@ Browser: https://localhost:4125
 
 Containers share the host kernel, so separating apps does not incur VM-sized overhead. The PHP apps reuse a common cached runtime layer. A single combined container would save a little process overhead but couple dependency versions, upgrades, failures, permissions, and scaling. It is not the recommended structure here. Actual resource use depends on the hosted apps and workload.
 
-The portal does not iframe, rewrite, or fork either application. Their own authentication and APIs remain intact. webtrees does not advertise a general REST API here; its native routes stay under `/webtrees/`.
+The portal does not iframe, rewrite, or fork Grocy or webtrees. Their own authentication and APIs remain intact. webtrees does not advertise a general REST API here; its native routes stay under `/webtrees/`. The included ssAcademy data server shares portal identities and provides its own scoped upload API and data viewer.
 
 ## Start
 
 Requires Docker Desktop with Linux containers (or Docker Engine) and Docker Compose v2.24.4+. PHP, Composer, and Node do not need to be installed on the host for Docker operation.
 
-The existing source checkouts must be present at `grocy/` and `webtrees/`. They are intentionally excluded from this repository's Git tracking. A fresh clone of the portal alone is not sufficient to build the app images. Keep the upstream applications' licenses with their source.
+The existing source checkouts must be present at `portal_apps/grocy/` and `portal_apps/webtrees/`. They are intentionally excluded from this repository's Git tracking. A fresh clone of the portal alone is not sufficient to build the app images. Keep the upstream applications' licenses with their source. This host-side directory layout does not change the public `/grocy/` and `/webtrees/` routes or the containers' data paths.
 
 From this directory:
 
@@ -42,22 +43,27 @@ From this directory:
 docker compose up -d --build --wait --wait-timeout 180
 ```
 
-Trust the generated local CA as described under **HTTPS and Security**, then open the configured `PASSKEY_ORIGIN`. The defaults, with `PORTAL_HOST=localhost`, are:
+For subsequent updates, run `.\update_docker.ps1` without arguments. It pulls Git changes with `--ff-only`, validates the Compose configuration, builds the application images, and starts the full stack with a 180-second readiness timeout without removing volumes. Use `.\update_docker.ps1 -NoPull` to rebuild local changes without pulling. The script works in Windows PowerShell 5.1 and PowerShell 7 and does not create or modify `.env`.
+
+Trust the generated local CA as described under **HTTPS and Security**, then open the configured `PASSKEY_ORIGIN`. The defaults, with `PASSKEY_RP_ID` blank or set to `localhost`, are:
 
 | Application | URL |
 | --- | --- |
 | Portal | https://localhost:4125/ |
 | Grocy | https://localhost:4125/grocy/ |
 | webtrees | https://localhost:4125/webtrees/ |
+| ssAcademy | https://localhost:4125/ssacademy/ |
 
-All three use the **same HTTPS hostname and port**. HTTP on `PORTAL_PORT` redirects to that origin, preserving the path and query. Use one canonical hostname consistently, especially when completing webtrees setup. If an app was already installed under HTTP, update its configured public URL to HTTPS.
+All applications use the **same HTTPS hostname and port**. HTTP on `WEB_API_PORT` redirects to that origin, preserving the path and query. Use one canonical hostname consistently, especially when completing webtrees setup. If an app was already installed under HTTP, update its configured public URL to HTTPS.
 
 - Grocy creates its initial SQLite database automatically. Its upstream default login is `admin` / `admin`; change the password immediately.
 - webtrees opens its setup wizard. SQLite is the lowest-overhead choice for a small personal installation; the image also includes PDO MySQL for a separately managed MySQL/MariaDB server. Set its base URL to the exact public URL ending in `/webtrees`, without a trailing slash.
 - Availability means the application's HTTP endpoint responds, including a login redirect or setup wizard. It does not imply that installation is complete or that a user is logged in.
 - New named volumes are used; existing data in the app checkouts is neither copied nor modified. Import existing data deliberately after backing it up.
 
-The gateway binds to `127.0.0.1` by default. To choose ports or explicitly allow LAN access, copy `.envexample` to `.env` and set `PORTAL_PORT` (HTTP redirect), `HTTPS_WEB_PORT` (HTTPS), `PORTAL_HOST`, and `PORTAL_BIND`. The two ports must differ. A bind address of `0.0.0.0` exposes the gateway to other machines; apply firewall rules and trust the certificate on those devices first. No app or Docker socket is exposed directly. Keep the hostname resolving to this server's reachable address using local DNS, a hosts entry, or correctly configured router forwarding; a public DNS name alone does not make a loopback listener reachable from another device.
+The gateway binds to `127.0.0.1` by default. To choose ports or explicitly allow LAN access, copy `.envexample` to `.env` and set `WEB_API_PORT` (HTTP redirect), `HTTPS_WEB_PORT` (HTTPS), `PASSKEY_RP_ID` (hostname), and `DOCKER_BIND_ADDRESS`. Blank ports use 8080 and 4125; a blank hostname uses `localhost`. The two ports must differ. A bind address of `0.0.0.0` exposes the gateway to other machines; apply firewall rules and trust the certificate on those devices first. No app or Docker socket is exposed directly. Keep the hostname resolving to this server's reachable address using local DNS, a hosts entry, or correctly configured router forwarding; a public DNS name alone does not make a loopback listener reachable from another device.
+
+These names replace `PORTAL_BIND`, `PORTAL_PORT`, and `PORTAL_HOST`, respectively with `DOCKER_BIND_ADDRESS`, `WEB_API_PORT`, and `PASSKEY_RP_ID`. `POSTGRES_PASSWORD` is reserved for integrations and is unused by this SQLite-based stack.
 
 ## Passkeys and Users
 
@@ -86,7 +92,7 @@ This console-authorized step prevents a first visitor from claiming administrato
 - Sessions use random, server-side-hashed tokens in HttpOnly, SameSite=Strict cookies. HTTPS enables the Secure flag. They expire after `SESSION_DAYS` (30 by default).
 - Registration/login challenges are browser-bound, single-use, expire after five minutes, and require authenticator user verification. Mutation requests must match the configured origin; passkey endpoints are rate-limited.
 - The dashboard/API and every request under `/grocy/` and `/webtrees/` require an approved portal session. All approved portal users have access to those launch paths, but the apps' native accounts and permissions still apply. This is a shared access gate, **not application-account SSO**.
-- Native API keys alone no longer bypass the gateway. Automation calling app APIs must also provide an approved portal session cookie. Long-lived API-token access is not implemented.
+- Grocy/webtrees native API keys alone do not bypass the gateway; their APIs also require a portal session cookie. ssAcademy separately supports upload-only tokens for its JSON ingestion endpoint, without granting access to the other apps or portal administration.
 - Revocation blocks subsequent requests; it does not erase previously rendered browser content or terminate requests/streams already in flight.
 
 ### Recovery
@@ -103,13 +109,21 @@ Use **Recover account** on the sign-in screen and create a replacement passkey. 
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `PASSKEY_ORIGIN` | `https://<PORTAL_HOST>:<HTTPS_WEB_PORT>` | Exact public origin, including scheme and port; no path; leave blank to use the Compose default |
-| `PASSKEY_RP_ID` | Origin hostname | Must equal the origin hostname; no port or IP address |
+| `PASSKEY_ORIGIN` | `https://<PASSKEY_RP_ID or localhost>:<HTTPS_WEB_PORT or 4125>` | Exact public origin, including scheme and port; no path; leave blank to use the Compose default |
+| `PASSKEY_RP_ID` | `localhost` for Docker's default origin | Certificate hostname; must equal the origin hostname; no scheme, port, path, or IP address |
 | `ALLOW_REGISTRATION` | `true` | Set `false` to disable new-member registration; initial operator setup still works |
 | `SESSION_DAYS` | `30` | Session lifetime, 1-90 days |
 | `AUTH_DB_PATH` | `/app/data/auth.sqlite` in Docker | Internal database location in the portal data volume |
 
-The HTTPS Compose override sets `PASSKEY_ORIGIN` to `https://<PORTAL_HOST>`. When changing a local port, update an explicitly set `PASSKEY_ORIGIN` too. A sign-in page opened at a different origin links to the configured address. A hostname change requires enrolling new passkeys at the new hostname, using operator recovery when necessary. Do not copy ssMusic's credentials into this database; they are bound to that application's relying party and user handles.
+The HTTPS Compose override sets `PASSKEY_ORIGIN` to `https://<PASSKEY_RP_ID>`. When changing a local port, update an explicitly set `PASSKEY_ORIGIN` too. Set `PASSKEY_RP_ID` to the hostname when using a custom origin. A sign-in page opened at a different origin links to the configured address. A hostname change requires enrolling new passkeys at the new hostname, using operator recovery when necessary. Do not copy ssMusic's credentials into this database; they are bound to that application's relying party and user handles.
+
+## ssAcademy Collections
+
+Open ssAcademy from Applications to import and view collection data exported by the Android app. Parsed balances and animation identifiers are stored as database rows, not export files. Members see their own imports; administrators can choose **All users** and **Edit values** to adjust reward balances and animation IDs with revision checks.
+
+For mobile uploads, the app registers its `username` and private per-installation `fingerprintToken` at `POST /ssacademy/api/devices/register`. An administrator approves the request in **ssAcademy > Upload tokens > App approvals**. The same token then authorizes upload-only requests for 90 days, with explicit revocation/reapproval. Tokens are hashed; no biometric data is used. The server no longer generates upload tokens, and legacy generated tokens must be replaced through registration and approval. Existing accounts and imported data are preserved.
+
+The verified upstream export is `ssAcademy-collections` version 1, which contains rewards and collected animations, not practice history, reading progress, or PINs. Administration changes server records only; they are not pushed to Android devices. See [portal_apps/ssAcademy/README.md](portal_apps/ssAcademy/README.md) for the API request format, permissions, validation limits, and backup instructions.
 
 ## Themes
 
@@ -117,7 +131,7 @@ The portal follows the theme names and palettes from ssMusic_Server:
 
 Midnight blue, Maize and blue, Royal purple, Gold, Green, Pink, and Black.
 
-Appearance settings include Light, Dark, and System modes, app launch behavior, and automatic status refresh. Appearance is browser-local; favorites and recent launches are scoped to each portal account in browser storage. They synchronize between portal tabs. Pre-authentication history from older versions is not assigned to a user. Fonts and app icons are served locally. These preferences style the **portal**, not the independent Grocy/webtrees interfaces; those retain their native appearance settings.
+Appearance settings include Light, Dark, and System modes, app launch behavior, and automatic status refresh. Appearance is browser-local; favorites are scoped to each portal account in browser storage and synchronize between portal tabs. App launches are not recorded. Fonts and app icons are served locally. These preferences style the **portal**, not the independent Grocy/webtrees interfaces; those retain their native appearance settings.
 
 ## Development
 
@@ -214,7 +228,7 @@ docker compose build --pull grocy
 docker compose up -d --no-deps --wait grocy
 ```
 
-Replace `grocy` with `webtrees` or `portal` as needed. Update the corresponding source checkout before rebuilding; the Dockerfiles build the local source, not a separate upstream release image. Back up data before upgrades because upstream schema migrations may prevent rolling back just the image. For reproducible releases, preserve each upstream dependency lockfile and pin image digests/source revisions in your release process. The portal's npm lockfile is included.
+Replace `grocy` with `webtrees`, `ssacademy`, or `portal` as needed. Update the corresponding source checkout before rebuilding; the Dockerfiles build the local source, not a separate upstream release image. Back up data before upgrades because upstream schema migrations may prevent rolling back just the image. For reproducible releases, preserve each upstream dependency lockfile and pin image digests/source revisions in your release process. The portal's npm lockfile is included.
 
 Persistent volumes:
 
@@ -225,6 +239,7 @@ Persistent volumes:
 | `ssportal_gateway_data` | Caddy certificates and other state |
 | `ssportal_gateway_config` | Caddy runtime state |
 | `ssportal_portal_data` | Portal users, passkey public keys, sessions, challenges, setup/recovery token hashes |
+| `ssportal_ssacademy_data` | Parsed ssAcademy imports, normalized values, revisions, and edit metadata |
 
 Ordinary `docker compose down` preserves data. **Do not run `docker compose down -v` unless you intend to erase the volumes.**
 
@@ -233,11 +248,12 @@ For a consistent SQLite backup, stop writes first and copy the app data to a new
 ```powershell
 $backup = Join-Path ./backups (Get-Date -Format 'yyyyMMdd-HHmmss')
 New-Item -ItemType Directory -Force $backup
-docker compose stop portal grocy webtrees
+docker compose stop portal ssacademy grocy webtrees
 docker compose cp portal:/app/data "$backup/portal"
+docker compose cp ssacademy:/app/data "$backup/ssacademy"
 docker compose cp grocy:/var/www/grocy/data "$backup/grocy"
 docker compose cp webtrees:/var/www/webtrees/data "$backup/webtrees"
-docker compose start portal grocy webtrees
+docker compose start portal ssacademy grocy webtrees
 ```
 
 Check command results and archive the backup off-host. Back up external MySQL/MariaDB databases separately. Restore only with the app stopped, copy files into the matching volume, and restore ownership to `node` (UID 1000) for portal data or `www-data` for PHP app data. Copy the whole SQLite data directory, including any WAL/SHM files. Treat portal backups as sensitive identity data. Do not overwrite populated volumes without a backup. Custom webtrees modules belong in a deliberate derived image or separately managed mount; the image is read-only and in-app code upgrades are intentionally disabled.
@@ -248,13 +264,14 @@ The HTTPS workflow follows ssMusic_Server: a separate HTTPS port, automatic pers
 
 ### Local Certificates
 
-With `HTTPS_MODE=local` (the default), Caddy generates a local CA and a certificate for `PORTAL_HOST`, stores their keys in the `gateway_data` volume, and renews managed certificates automatically. This is a proper local CA plus leaf certificate rather than a self-signed leaf; clients trust the CA once and continue trusting renewed certificates. The HTTP redirect is the only public HTTP application route. Internal container-to-container traffic and health checks can remain HTTP.
+With `HTTPS_MODE=local` (the default), Caddy generates a local CA and a certificate for `PASSKEY_RP_ID` (or `localhost` when blank), stores their keys in the `gateway_data` volume, and renews managed certificates automatically. This is a proper local CA plus leaf certificate rather than a self-signed leaf; clients trust the CA once and continue trusting renewed certificates. The HTTP redirect is the only public HTTP application route. Internal container-to-container traffic and health checks can remain HTTP. `HTTPS_MODE`, certificate paths, and `ALLOW_REGISTRATION` remain optional advanced settings; they are not required in the seven-variable environment template.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `PORTAL_PORT` | `8080` | Host HTTP redirect port |
+| `DOCKER_BIND_ADDRESS` | `127.0.0.1` | Host interface for published ports |
+| `WEB_API_PORT` | `8080` | Host HTTP redirect port |
 | `HTTPS_WEB_PORT` | `4125` | Host HTTPS port (TCP and UDP/HTTP3) |
-| `PORTAL_HOST` | `localhost` | Certificate and public hostname; no scheme, path, or port |
+| `PASSKEY_RP_ID` | `localhost` | Certificate and public hostname; no scheme, path, or port |
 | `HTTPS_MODE` | `local` | Local CA by default; `public` enables public ACME issuance |
 | `HTTPS_CERT_PATH` | Empty | Optional PEM certificate/full-chain path inside the gateway |
 | `HTTPS_KEY_PATH` | Empty | Optional matching PEM private-key path inside the gateway |
@@ -275,7 +292,7 @@ Import-Certificate -FilePath .\certificates\ssportal-local-ca.crt -CertStoreLoca
 
 This changes your user's trusted root store. Trust it only on devices where you trust this server and its operators. Restart the browser afterward. Other operating systems, Firefox configurations, and mobile devices may require their own certificate installation steps. Do not share the CA private key or copy it out of Docker. An HTTPS certificate-warning bypass is not the supported passkey setup. The application does not automatically modify host trust stores or disable certificate verification.
 
-Keep `gateway_data` across updates and restarts. Deleting it creates a new CA, which clients would need to trust again. Local DNS/hosts configuration must route `PORTAL_HOST` to the machine running the gateway; TLS does not configure DNS, Windows firewall rules, or router port forwarding.
+Keep `gateway_data` across updates and restarts. Deleting it creates a new CA, which clients would need to trust again. Local DNS/hosts configuration must route `PASSKEY_RP_ID` (or `localhost`) to the machine running the gateway; TLS does not configure DNS, Windows firewall rules, or router port forwarding.
 
 ### Supplied Certificates
 
@@ -286,7 +303,7 @@ HTTPS_CERT_PATH=/certificates/server-cert.pem
 HTTPS_KEY_PATH=/certificates/server-key.pem
 ```
 
-Paths must be readable absolute container paths containing only letters, digits, underscores, dots, slashes, and hyphens. Both settings are required together. The supplied certificate must cover `PORTAL_HOST`; it takes precedence over automatic local/public issuance. Supply the intermediate chain where required. Your certificate provider remains responsible for renewal; replace the files and restart the gateway after renewal. A partial pair, missing file, or invalid mode fails startup rather than silently falling back.
+Paths must be readable absolute container paths containing only letters, digits, underscores, dots, slashes, and hyphens. Both settings are required together. The supplied certificate must cover `PASSKEY_RP_ID` (or `localhost`); it takes precedence over automatic local/public issuance. Supply the intermediate chain where required. Your certificate provider remains responsible for renewal; replace the files and restart the gateway after renewal. A partial pair, missing file, or invalid mode fails startup rather than silently falling back.
 
 ```powershell
 docker compose up -d --no-deps --wait gateway
@@ -308,13 +325,13 @@ Then apply the environment change without rebuilding or deleting data:
 docker compose up -d --no-deps --wait portal gateway
 ```
 
-For a proxy on this machine with `HTTPS_WEB_PORT=4125`, the upstream address is `https://127.0.0.1:4125`, with upstream TLS SNI/hostname verification set to `PORTAL_HOST`. Trust the exported portal CA in the proxy (or supply a certificate it already trusts). Do not disable upstream certificate verification. Preserve the public `Host` and browser `Origin` headers, cookies, full request paths, and WebSocket upgrades. A proxy on another machine cannot reach a loopback binding; use an explicitly firewalled private binding for that topology.
+For a proxy on this machine with `HTTPS_WEB_PORT=4125`, the upstream address is `https://127.0.0.1:4125`, with upstream TLS SNI/hostname verification set to `PASSKEY_RP_ID` (or `localhost`). Trust the exported portal CA in the proxy (or supply a certificate it already trusts). Do not disable upstream certificate verification. Preserve the public `Host` and browser `Origin` headers, cookies, full request paths, and WebSocket upgrades. A proxy on another machine cannot reach a loopback binding; use an explicitly firewalled private binding for that topology.
 
 The browser must open the configured public HTTPS origin, not an internal upstream URL or an iframe inside an HTTP page. If an explicit `PASSKEY_ORIGIN` is set, update it when changing the hostname or public port. Direct access on a different origin intentionally links back to the configured sign-in address. Passkeys enrolled under another hostname need re-enrollment or account recovery.
 
 ### Public Certificates
 
-For a real domain, point its DNS to this server, allow inbound ports 80/443, set `PORTAL_HOST` to the hostname (no scheme/path) and explicitly set `PORTAL_BIND=0.0.0.0` in `.env`, then:
+For a real domain, point its DNS to this server, allow inbound ports 80/443, set `PASSKEY_RP_ID` to the hostname (no scheme/path/port) and explicitly set `DOCKER_BIND_ADDRESS=0.0.0.0` in `.env`, then:
 
 ```powershell
 docker compose -f compose.yaml -f compose.https.yaml up -d --build --wait
@@ -337,7 +354,9 @@ The portal registry/status and administration APIs require approved sessions. Ca
 
 ```powershell
 npm --prefix portal ci
+npm --prefix portal_apps/ssAcademy ci
 npm --prefix portal test
+npm --prefix portal_apps/ssAcademy test
 npm --prefix portal run build
 $env:STACK_CA_CERT = (Resolve-Path ./certificates/ssportal-local-ca.crt).Path
 $env:STACK_URL = 'https://localhost:4125'

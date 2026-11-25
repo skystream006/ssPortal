@@ -66,7 +66,8 @@ test('bounds slow health checks with a real request timeout', async () => {
 
 test('default applications use separate paths under the same hostname', async () => {
   const apps = await loadApps(new URL('../config/apps.json', import.meta.url), {});
-  assert.deepEqual(apps.map((entry) => entry.path), ['/grocy/', '/webtrees/']);
+  assert.deepEqual(apps.map((entry) => entry.path), ['/grocy/', '/webtrees/', '/ssacademy/']);
+  assert.deepEqual(apps.map((entry) => entry.source), ['portal_apps/grocy/', 'portal_apps/webtrees/', 'portal_apps/ssAcademy/']);
   assert.equal(apps[0].apiPath, '/grocy/api/');
   assert.equal('healthUrl' in publicApp(apps[0]), false);
   assert.throws(() => validateApps([apps[0], apps[0]]), /unique/);

@@ -8,7 +8,9 @@ import test from 'node:test';
 const origin = process.env.STACK_URL ?? 'https://localhost:4125';
 const authority = process.env.STACK_CA_CERT ? readFileSync(process.env.STACK_CA_CERT) : undefined;
 const connectAddress = process.env.STACK_CONNECT_ADDRESS;
+const connectPort = process.env.STACK_CONNECT_PORT ? Number(process.env.STACK_CONNECT_PORT) : undefined;
 if (connectAddress && !isIP(connectAddress)) throw new Error('STACK_CONNECT_ADDRESS must be an IP address.');
+if (connectPort !== undefined && (!Number.isInteger(connectPort) || connectPort < 1 || connectPort > 65535)) throw new Error('STACK_CONNECT_PORT must be a valid TCP port.');
 
 function request(target, { body, ...options } = {}) {
   const url = new URL(target);
@@ -16,6 +18,8 @@ function request(target, { body, ...options } = {}) {
   return new Promise((resolve, reject) => {
     const connection = send(url, {
       ...options,
+      ...(url.protocol === 'https:' && connectPort ? { port: connectPort } : {}),
+      headers: { host: url.host, ...options.headers },
       ca: authority,
       lookup: connectAddress ? (hostname, lookupOptions, callback) => {
         const address = { address: connectAddress, family: isIP(connectAddress) };
@@ -61,6 +65,12 @@ test('HTTP redirects preserve app paths and queries on the configured HTTPS orig
   assert.equal(response.headers.get('location'), `${new URL(origin).origin}/grocy/shoppinglist?probe=1`);
 });
 
+test('direct HTTPS access to the bind IP redirects to the canonical hostname', { skip: !process.env.STACK_BIND_URL }, async () => {
+  const response = await request(new URL('/grocy/shoppinglist?probe=1', process.env.STACK_BIND_URL));
+  assert.equal(response.status, 308);
+  assert.equal(response.headers.get('location'), `${new URL(origin).origin}/grocy/shoppinglist?probe=1`);
+});
+
 test('one gateway serves the sign-in shell and exposes only public authentication and health information', async () => {
   assert.equal((await get('/')).status, 200);
   assert.equal((await get('/api/portal/health')).status, 200);
@@ -99,4 +109,35 @@ test('private app data and portal configuration are not publicly served', async 
   assert.equal((await get('/config/apps.json')).status, 404);
   assert.equal((await get('/data/auth.sqlite')).status, 404);
   assert.equal((await get('/api/portal/unknown')).status, 404);
+});
+
+test('ssAcademy is routed on the same HTTPS origin and rejects unauthenticated data access', async () => {
+  assert.equal((await get('/ssacademy/health')).status, 200);
+  const prefix = await get('/ssacademy?probe=1');
+  assert.equal(prefix.status, 308);
+  assert.equal(prefix.headers.get('location'), '/ssacademy/?probe=1');
+  const page = await get('/ssacademy/', { headers: { accept: 'text/html' } });
+  assert.equal(page.status, 302);
+  assert.equal(page.headers.get('location'), '/?returnTo=%2Fssacademy%2F');
+  for (const path of ['/ssacademy/api/imports', '/ssacademy/api/tokens']) {
+    assert.equal((await get(path)).status, 401);
+    assert.equal((await get(path, { headers: { authorization: 'Bearer invalid-upload-token', 'x-user-id': 'forged' } })).status, 401);
+  }
+  assert.equal((await get('/ssacademy/data/academy.sqlite')).status, 404);
+  for (const path of ['style.css', 'theme.css', 'fonts/manrope.woff2', 'lucide.js']) {
+    assert.equal((await get(`/ssacademy/assets/${path}`)).status, 200, path);
+  }
+  const icon = await get('/icons/ssacademy.png');
+  assert.equal(icon.status, 200);
+  assert.match(icon.headers.get('content-type'), /^image\/png(?:;|$)/);
+});
+
+test('ssAcademy public mobile enrollment validates requests without creating live registrations', async () => {
+  for (const prefix of ['/ssacademy/api/devices', '/api/portal/integrations/ssacademy/devices']) {
+    for (const action of ['register', 'status']) {
+      const path = `${prefix}/${action}`;
+      const response = await get(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+      assert.equal(response.status, 400, path);
+    }
+  }
 });
