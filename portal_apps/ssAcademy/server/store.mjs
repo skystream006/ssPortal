@@ -32,13 +32,26 @@ export function createStore({ path = ':memory:', now = Date.now } = {}) {
       previous_sha256 TEXT NOT NULL, current_sha256 TEXT NOT NULL,
       PRIMARY KEY(import_id, revision)
     );
+    CREATE TABLE IF NOT EXISTS collection_versions (
+      owner_id TEXT PRIMARY KEY, sequence INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS collection_pins (
+      owner_id TEXT PRIMARY KEY REFERENCES collection_versions(owner_id),
+      import_id TEXT UNIQUE REFERENCES imports(id) ON DELETE SET NULL
+    );
   `);
 
   const columns = new Set(database.prepare("SELECT name FROM pragma_table_info('imports')").all().map((column) => column.name));
-  for (const [name, type] of Object.entries({ current_sha256: 'TEXT', revision: 'INTEGER NOT NULL DEFAULT 1', updated_at: 'INTEGER', updated_by: 'TEXT', owner_name: 'TEXT' })) {
+  for (const [name, type] of Object.entries({ current_sha256: 'TEXT', revision: 'INTEGER NOT NULL DEFAULT 1', updated_at: 'INTEGER', updated_by: 'TEXT', owner_name: 'TEXT', sync_order: 'INTEGER NOT NULL DEFAULT 0' })) {
     if (!columns.has(name)) database.exec(`ALTER TABLE imports ADD COLUMN ${name} ${type}`);
   }
   database.exec('UPDATE imports SET current_sha256 = sha256 WHERE current_sha256 IS NULL');
+  database.exec('CREATE INDEX IF NOT EXISTS imports_sync_head ON imports(owner_id, sync_order DESC, created_at DESC, id DESC)');
+  const fallback = database.prepare('SELECT id, format, version FROM imports WHERE owner_id = ? ORDER BY sync_order DESC, created_at DESC, id DESC LIMIT 1');
+  const readPin = database.prepare('SELECT import_id AS id FROM collection_pins WHERE owner_id = ?');
+  const setPin = database.prepare('INSERT INTO collection_pins (owner_id, import_id) VALUES (?, ?) ON CONFLICT(owner_id) DO UPDATE SET import_id = excluded.import_id');
+  const pinnedImport = database.prepare('SELECT id, format, version FROM imports WHERE owner_id = ? AND id = ?');
+  const currentHead = (ownerId, pin = readPin.get(ownerId)) => pin ? pinnedImport.get(ownerId, pin.id) : fallback.get(ownerId);
 
   const summary = `SELECT id, owner_id AS ownerId, coalesce(owner_name, owner_id) AS ownerName,
     source, format, version, current_sha256 AS sha256, sha256 AS importedSha256,
@@ -48,17 +61,43 @@ export function createStore({ path = ':memory:', now = Date.now } = {}) {
     (SELECT coalesce(sum(fragments), 0) FROM reward_balances WHERE import_id = imports.id) AS fragments,
     (SELECT count(*) FROM collected_animations WHERE import_id = imports.id) AS animationCount FROM imports`;
 
-  function transaction(action) {
-    database.exec('BEGIN IMMEDIATE');
+  function transaction(action, readOnly = false) {
+    database.exec(readOnly ? 'BEGIN' : 'BEGIN IMMEDIATE');
     try { const result = action(); database.exec('COMMIT'); return result; }
     catch (error) { database.exec('ROLLBACK'); throw error; }
+  }
+
+  function collectionRows(id) {
+    const rewards = database.prepare('SELECT reward_type AS id, whole, fragments FROM reward_balances WHERE import_id = ? ORDER BY reward_type').all(id);
+    const animations = database.prepare('SELECT animation_id FROM collected_animations WHERE import_id = ? ORDER BY animation_id').all(id).map((row) => row.animation_id);
+    return { rewards, animations };
+  }
+
+  function backup({ format, version, rewards, animations }) {
+    return { format, version, rewards: Object.fromEntries(rewards.map(({ id, whole, fragments }) => [id, { whole, fragments }])), pokemons: animations };
+  }
+
+  function syncVersion(ownerId) {
+    const sequence = database.prepare('SELECT sequence FROM collection_versions WHERE owner_id = ?').get(ownerId)?.sequence ?? 0;
+    return createHash('sha256').update(JSON.stringify([ownerId, sequence])).digest('base64url');
+  }
+
+  function advanceVersion(ownerId) {
+    return database.prepare(`INSERT INTO collection_versions VALUES (?, 1) ON CONFLICT(owner_id)
+      DO UPDATE SET sequence = sequence + 1 RETURNING sequence`).get(ownerId).sequence;
+  }
+
+  function getSync(ownerId) {
+    return transaction(() => {
+      const record = currentHead(ownerId);
+      return { version: syncVersion(ownerId), data: record ? backup({ ...record, ...collectionRows(record.id) }) : null };
+    }, true);
   }
 
   function getImport(ownerId, id, allowAll = false) {
     const record = database.prepare(`${summary} WHERE (owner_id = ? OR ? = 1) AND id = ?`).get(ownerId, allowAll ? 1 : 0, id);
     if (!record) throw inputError('Import not found.', 404);
-    const rewards = database.prepare('SELECT reward_type AS id, whole, fragments FROM reward_balances WHERE import_id = ? ORDER BY reward_type').all(id);
-    const animations = database.prepare('SELECT animation_id FROM collected_animations WHERE import_id = ? ORDER BY animation_id').all(id).map((row) => row.animation_id);
+    const { rewards, animations } = collectionRows(id);
     const edits = database.prepare('SELECT revision, editor_id AS editorId, edited_at AS editedAt, previous_sha256 AS previousSha256, current_sha256 AS sha256 FROM import_edits WHERE import_id = ? ORDER BY revision DESC').all(id);
     return { ...record, rewards: rewards.map((balance) => ({ ...REWARDS.find((reward) => reward.id === balance.id), ...balance })), animations, edits };
   }
@@ -72,16 +111,28 @@ export function createStore({ path = ':memory:', now = Date.now } = {}) {
 
   function importData(ownerId, input, ownerName = ownerId) {
     if (typeof ownerId !== 'string' || !ownerId) throw inputError('An authenticated owner is required.', 401);
-    const { source, data } = validateImport(input);
+    const { source, data, baseVersion } = validateImport(input);
     const digest = createHash('sha256').update(JSON.stringify(data)).digest('hex');
     return transaction(() => {
-      const existing = database.prepare('SELECT id FROM imports WHERE owner_id = ? AND source = ? AND sha256 = ?').get(ownerId, source, digest);
-      if (existing) return { duplicate: true, import: getImport(ownerId, existing.id) };
-      const id = randomUUID();
-      database.prepare('INSERT INTO imports (id, owner_id, source, format, version, sha256, created_at, current_sha256, owner_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        .run(id, ownerId, source, data.format, data.version, digest, now(), digest, ownerName);
-      writeRecords(id, data);
-      return { duplicate: false, import: getImport(ownerId, id) };
+      if (baseVersion !== undefined && baseVersion !== syncVersion(ownerId)) throw inputError('The collection changed. Read it again before syncing.', 409);
+      const pin = readPin.get(ownerId);
+      const existing = database.prepare('SELECT id, sync_order AS syncOrder FROM imports WHERE owner_id = ? AND source = ? AND sha256 = ?').get(ownerId, source, digest);
+      const id = existing?.id ?? randomUUID();
+      if (!existing) {
+        database.prepare('INSERT INTO imports (id, owner_id, source, format, version, sha256, created_at, current_sha256, owner_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+          .run(id, ownerId, source, data.format, data.version, digest, now(), digest, ownerName);
+        writeRecords(id, data);
+      }
+      if (baseVersion !== undefined) {
+        if (pin?.id !== id || !existing?.syncOrder) {
+          database.prepare('UPDATE imports SET sync_order = ? WHERE id = ?').run(advanceVersion(ownerId), id);
+          setPin.run(ownerId, id);
+        }
+      } else if (!existing && !pin && fallback.get(ownerId).id === id) {
+        advanceVersion(ownerId);
+      }
+      const record = getImport(ownerId, id);
+      return { duplicate: !!existing, import: record, ...(baseVersion === undefined ? {} : { sync: { version: syncVersion(ownerId), data: backup(record) } }) };
     });
   }
 
@@ -103,6 +154,7 @@ export function createStore({ path = ':memory:', now = Date.now } = {}) {
       database.prepare('UPDATE imports SET current_sha256 = ?, revision = ?, updated_at = ?, updated_by = ? WHERE id = ?')
         .run(digest, revision, timestamp, actor.id, id);
       database.prepare('INSERT INTO import_edits VALUES (?, ?, ?, ?, ?, ?)').run(id, revision, actor.id, timestamp, previous.sha256, digest);
+      if (currentHead(previous.ownerId)?.id === id) advanceVersion(previous.ownerId);
       return getImport(actor.id, id, true);
     });
   }
@@ -125,8 +177,16 @@ export function createStore({ path = ':memory:', now = Date.now } = {}) {
   }
 
   function deleteImport(ownerId, id) {
-    if (database.prepare('DELETE FROM imports WHERE owner_id = ? AND id = ?').run(ownerId, id).changes !== 1) throw inputError('Import not found.', 404);
+    transaction(() => {
+      const pin = readPin.get(ownerId);
+      const previous = currentHead(ownerId, pin);
+      if (database.prepare('DELETE FROM imports WHERE owner_id = ? AND id = ?').run(ownerId, id).changes !== 1) throw inputError('Import not found.', 404);
+      if (previous?.id === id) {
+        advanceVersion(ownerId);
+        if (pin) setPin.run(ownerId, fallback.get(ownerId)?.id ?? null);
+      }
+    });
   }
 
-  return { importData, updateImport, listImports, getImport, deleteImport, close: () => database.close() };
+  return { importData, updateImport, listImports, getImport, getSync, deleteImport, close: () => database.close() };
 }

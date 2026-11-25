@@ -75,6 +75,11 @@ export function createAuthStore({ path = ':memory:', now = Date.now, sessionDays
     CREATE INDEX IF NOT EXISTS academy_devices_username ON academy_devices(username_key);
   `);
 
+  const deviceColumns = new Set(database.prepare("SELECT name FROM pragma_table_info('academy_devices')").all().map((column) => column.name));
+  for (const name of ['sync_requested', 'sync_approved']) {
+    if (!deviceColumns.has(name)) database.exec(`ALTER TABLE academy_devices ADD COLUMN ${name} INTEGER NOT NULL DEFAULT 0 CHECK (${name} IN (0, 1))`);
+  }
+
   function transaction(action) {
     database.exec('BEGIN IMMEDIATE');
     try {
@@ -197,7 +202,7 @@ export function createAuthStore({ path = ':memory:', now = Date.now, sessionDays
       if (role !== user.role || status !== user.status) {
         database.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId);
         database.prepare('DELETE FROM enrollment_tokens WHERE user_id = ?').run(userId);
-        database.prepare("UPDATE academy_devices SET status = 'revoked', updated_at = ? WHERE user_id = ?").run(now(), userId);
+        database.prepare("UPDATE academy_devices SET status = 'revoked', sync_approved = 0, updated_at = ? WHERE user_id = ?").run(now(), userId);
       }
       return getUser(userId);
     });
@@ -311,7 +316,7 @@ export function createAuthStore({ path = ':memory:', now = Date.now, sessionDays
       consumeEnrollmentCode(tokenHash, 'recovery', userId);
       database.prepare('DELETE FROM credentials WHERE user_id = ?').run(userId);
       database.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId);
-      database.prepare("UPDATE academy_devices SET status = 'revoked', updated_at = ? WHERE user_id = ?").run(now(), userId);
+      database.prepare("UPDATE academy_devices SET status = 'revoked', sync_approved = 0, updated_at = ? WHERE user_id = ?").run(now(), userId);
       insertCredential(userId, credential, name);
       return getUser(userId);
     });
@@ -325,13 +330,15 @@ export function createAuthStore({ path = ':memory:', now = Date.now, sessionDays
       id: record.id, username: record.username, userId: record.user_id,
       accountName: user?.name ?? null, accountStatus: user?.status ?? null,
       fingerprint: record.token_hash.slice(0, 16), status,
+      syncRequested: record.sync_requested === 1,
+      syncApproved: status === 'approved' && user?.status === 'approved' && record.sync_approved === 1,
       createdAt: record.created_at, updatedAt: record.updated_at,
       approvedAt: record.approved_at, approvedBy: record.approved_by,
       expiresAt: record.expires_at, lastUsedAt: record.last_used_at,
     };
   }
 
-  function registerAcademyDevice(username, fingerprintToken) {
+  function registerAcademyDevice(username, fingerprintToken, requestSync = false) {
     const name = normalizeName(username);
     const nameKey = name.toLowerCase();
     const tokenHash = academyFingerprintHash(fingerprintToken);
@@ -339,7 +346,9 @@ export function createAuthStore({ path = ':memory:', now = Date.now, sessionDays
       const existing = database.prepare('SELECT * FROM academy_devices WHERE token_hash = ?').get(tokenHash);
       if (existing) {
         if (existing.username_key !== nameKey) throw authError(409, 'This app token is already registered to a different username.');
-        return { created: false, device: academyDevice(existing) };
+        if (requestSync !== true || existing.sync_requested === 1) return { created: false, device: academyDevice(existing) };
+        const requested = database.prepare('UPDATE academy_devices SET sync_requested = 1, updated_at = ? WHERE id = ? RETURNING *').get(now(), existing.id);
+        return { created: false, device: academyDevice(requested) };
       }
       if (database.prepare('SELECT count(*) AS count FROM academy_devices').get().count >= 2000
         || database.prepare('SELECT count(*) AS count FROM academy_devices WHERE username_key = ?').get(nameKey).count >= 20) {
@@ -348,8 +357,8 @@ export function createAuthStore({ path = ':memory:', now = Date.now, sessionDays
       const user = database.prepare('SELECT id FROM users WHERE name_key = ?').get(nameKey);
       const id = randomUUID();
       const timestamp = now();
-      database.prepare(`INSERT INTO academy_devices (id, token_hash, username, username_key, user_id, status, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)`).run(id, tokenHash, name, nameKey, user?.id ?? null, timestamp, timestamp);
+      database.prepare(`INSERT INTO academy_devices (id, token_hash, username, username_key, user_id, status, created_at, updated_at, sync_requested)
+        VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?)`).run(id, tokenHash, name, nameKey, user?.id ?? null, timestamp, timestamp, Number(requestSync === true));
       return { created: true, device: academyDevice(database.prepare('SELECT * FROM academy_devices WHERE id = ?').get(id)) };
     });
   }
@@ -380,22 +389,26 @@ export function createAuthStore({ path = ':memory:', now = Date.now, sessionDays
     return { devices: records.map(academyDevice), total, page: pageNumber, pageSize: size };
   }
 
-  function updateAcademyDevice(actorId, id, status) {
+  function updateAcademyDevice(actorId, id, status, syncApproved = false) {
     return transaction(() => {
       requireAdmin(actorId);
       if (!['approved', 'revoked'].includes(status)) throw authError(400, 'Choose approved or revoked access.');
       const record = database.prepare('SELECT * FROM academy_devices WHERE id = ?').get(id);
       if (!record) throw authError(404, 'App registration not found.');
+      if (typeof syncApproved !== 'boolean' || (syncApproved && (status !== 'approved' || record.sync_requested !== 1))) {
+        throw authError(400, 'Owner sync can only be granted when approving an app that requested it.');
+      }
       if (status === 'approved') {
         const userId = record.user_id ?? database.prepare('SELECT id FROM users WHERE name_key = ?').get(record.username_key)?.id;
         if (!userId) throw authError(409, 'Create and approve the named portal account before approving this app.');
         requireApproved(userId);
-        if (record.status === 'approved' && record.expires_at > now()) return academyDevice(record);
         const timestamp = now();
-        database.prepare(`UPDATE academy_devices SET user_id = ?, status = 'approved', updated_at = ?, approved_at = ?, approved_by = ?, expires_at = ? WHERE id = ?`)
-          .run(userId, timestamp, timestamp, actorId, timestamp + 90 * 86_400_000, id);
+        const active = record.status === 'approved' && record.expires_at > timestamp;
+        if (active && record.sync_approved === Number(syncApproved)) return academyDevice(record);
+        database.prepare(`UPDATE academy_devices SET user_id = ?, status = 'approved', sync_approved = ?, updated_at = ?, approved_at = ?, approved_by = ?, expires_at = ? WHERE id = ?`)
+          .run(userId, Number(syncApproved), timestamp, timestamp, actorId, active ? record.expires_at : timestamp + 90 * 86_400_000, id);
       } else {
-        database.prepare("UPDATE academy_devices SET status = 'revoked', updated_at = ? WHERE id = ?").run(now(), id);
+        database.prepare("UPDATE academy_devices SET status = 'revoked', sync_approved = 0, updated_at = ? WHERE id = ?").run(now(), id);
       }
       return academyDevice(database.prepare('SELECT * FROM academy_devices WHERE id = ?').get(id));
     });
@@ -404,12 +417,12 @@ export function createAuthStore({ path = ':memory:', now = Date.now, sessionDays
   function getAcademyDeviceUser(fingerprintToken) {
     let tokenHash;
     try { tokenHash = academyFingerprintHash(fingerprintToken); } catch { return null; }
-    const record = database.prepare("SELECT id, user_id FROM academy_devices WHERE token_hash = ? AND status = 'approved' AND expires_at > ?")
+    const record = database.prepare("SELECT id, user_id, sync_approved FROM academy_devices WHERE token_hash = ? AND status = 'approved' AND expires_at > ?")
       .get(tokenHash, now());
     const user = record?.user_id ? getUser(record.user_id) : null;
     if (user?.status !== 'approved') return null;
     database.prepare('UPDATE academy_devices SET last_used_at = ? WHERE id = ?').run(now(), record.id);
-    return user;
+    return { ...user, syncApproved: record.sync_approved === 1 };
   }
 
   function deleteAcademyDevice(actorId, id) {

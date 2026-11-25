@@ -59,6 +59,9 @@ export function validateExport(input) {
 }
 
 export function validateImport(input) {
-  object(input, ['source', 'data'], 'import request');
-  return { source: normalizeSource(input.source), data: validateExport(input.data) };
+  object(input, ['source', 'data', 'baseVersion'], 'import request');
+  if (Object.hasOwn(input, 'baseVersion') && (typeof input.baseVersion !== 'string' || !input.baseVersion.length || input.baseVersion.length > 160)) {
+    throw inputError('baseVersion must be a nonempty string of at most 160 characters.');
+  }
+  return { source: normalizeSource(input.source), data: validateExport(input.data), baseVersion: input.baseVersion };
 }

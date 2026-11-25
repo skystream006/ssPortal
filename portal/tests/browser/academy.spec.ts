@@ -164,6 +164,42 @@ test('ssAcademy app approvals filter safely and wait for an approved portal acco
   await expect(page.locator('#tokens-body tr')).toHaveCount(2);
 });
 
+test('ssAcademy owner sync requires a separate admin grant and can be limited to uploads again', async ({ page, request, academy }) => {
+  const pair = { username: 'Test administrator', fingerprintToken: randomBytes(32).toString('hex') };
+  const api = `${academy.origin}/ssacademy/api`;
+  const headers = { authorization: `Bearer ${pair.fingerprintToken}` };
+  const registered = await request.post(`${api}/devices/register`, { data: { ...pair, requestSync: true } });
+  expect(registered.status()).toBe(202);
+  expect((await registered.json()).device.syncApproved).toBe(false);
+  await page.goto('/ssacademy/#tokens');
+  await expect(page.locator('[data-access]')).toHaveText('Owner sync requested');
+  await page.getByRole('button', { name: /^Approve Test administrator/ }).click();
+  const choice = page.getByRole('checkbox', { name: /download and sync this account/ });
+  await expect(choice).not.toBeChecked();
+  await page.getByRole('button', { name: 'Approve app', exact: true }).click();
+  await expect(page.locator('[data-access]')).toContainText('Uploads only');
+  expect((await request.get(`${api}/sync`, { headers })).status()).toBe(403);
+  await page.getByRole('button', { name: /^Change access for Test administrator/ }).click();
+  await expect(choice).not.toBeChecked();
+  await choice.check();
+  await page.getByRole('button', { name: 'Save access' }).click();
+  await expect(page.locator('[data-access]')).toHaveText('Uploads and owner sync');
+  expect((await (await request.post(`${api}/devices/status`, { data: pair })).json()).device.syncApproved).toBe(true);
+  academy.store.importData('another-owner', { source: 'Other tablet', data: exportData });
+  const empty = await (await request.get(`${api}/sync`, { headers })).json();
+  expect(empty.data).toBeNull();
+  const saved = await request.post(`${api}/imports`, { headers, data: { source: 'Learning tablet', data: exportData, baseVersion: empty.version } });
+  expect(saved.status()).toBe(201);
+  expect(await (await request.get(`${api}/sync`, { headers })).json()).toEqual((await saved.json()).sync);
+  await page.getByRole('button', { name: /^Change access for Test administrator/ }).click();
+  await expect(choice).toBeChecked();
+  await choice.uncheck();
+  await page.getByRole('button', { name: 'Save access' }).click();
+  await expect(page.locator('[data-access]')).toContainText('Uploads only');
+  expect((await request.get(`${api}/sync`, { headers })).status()).toBe(403);
+  expect((await (await request.post(`${api}/devices/status`, { data: pair })).json()).device.syncApproved).toBe(false);
+});
+
 test('ssAcademy rejects invalid imports and reads local files as JSON data, never multipart uploads', async ({ page }) => {
   await page.goto('/ssacademy/');
   await page.getByRole('button', { name: 'Import data', exact: true }).click();

@@ -11,11 +11,14 @@ const sessionHeaders = { cookie: 'test-session', origin };
 const portal = {
   async identify(headers) {
     if (!headers.cookie && !headers.authorization) throw inputError('Sign in required.', 401);
-    return { user: { id: headers.cookie === 'other-session' ? 'owner-b' : headers.cookie === 'admin-session' ? 'administrator' : 'owner-a', name: 'User', role: headers.cookie === 'admin-session' ? 'admin' : 'user' }, authType: headers.authorization ? 'device-token' : 'session', origin };
+    const syncApproved = headers.authorization === 'Bearer sync-admin';
+    const admin = headers.cookie === 'admin-session' || headers.authorization === 'Bearer upload-admin' || syncApproved;
+    return { user: { id: admin ? 'administrator' : headers.cookie === 'other-session' ? 'owner-b' : 'owner-a', name: 'User', role: admin ? 'admin' : 'user' },
+      authType: headers.authorization ? 'device-token' : 'session', ...(syncApproved ? { syncApproved } : {}), origin };
   },
   async tokens() { return { devices: [], total: 0, page: 1, pageSize: 50 }; },
   async deviceRequest(action, headers, body) {
-    return { status: action === 'register' ? 202 : 200, body: { device: { id: 'pending-app', username: body.username, status: 'pending', fingerprint: 'safe-display-id', expiresAt: null } } };
+    return { status: action === 'register' ? 202 : 200, body: { device: { id: 'pending-app', username: body.username, status: 'pending', fingerprint: 'safe-display-id', expiresAt: null, syncApproved: false } } };
   },
 };
 
@@ -46,12 +49,76 @@ test('upload tokens cannot read, delete, or manage tokens; session writes requir
     const token = { authorization: 'Bearer upload-only' };
     const uploaded = await server.inject({ method: 'POST', url: '/ssacademy/api/imports', headers: token, payload: data() });
     assert.equal(uploaded.statusCode, 201);
-    for (const url of ['/ssacademy/api/me', '/ssacademy/api/imports', '/ssacademy/api/tokens']) {
+    assert.equal('sync' in uploaded.json(), false);
+    for (const url of ['/ssacademy/api/me', '/ssacademy/api/imports', '/ssacademy/api/tokens', '/ssacademy/api/sync']) {
       assert.equal((await server.inject({ url, headers: token })).statusCode, 403);
     }
     assert.equal((await server.inject({ method: 'DELETE', url: `/ssacademy/api/imports/${uploaded.json().import.id}`, headers: token })).statusCode, 403);
     assert.equal((await server.inject({ method: 'POST', url: '/ssacademy/api/imports', headers: { cookie: 'test-session', origin: 'https://evil.example' }, payload: data() })).statusCode, 403);
     assert.equal((await server.inject({ method: 'POST', url: '/ssacademy/api/imports', headers: { cookie: 'test-session' }, payload: data() })).statusCode, 403);
+  } finally { await server.close(); }
+});
+
+test('owner sync reads only the bearer owner and conditionally writes a canonical head', async () => {
+  const store = createStore();
+  const server = await buildApp({ store, portal, staticDir: false });
+  const sync = { authorization: 'Bearer sync-admin' };
+  const admin = { cookie: 'admin-session', origin };
+  const read = (headers = sync, query = '') => server.inject({ url: `/ssacademy/api/sync${query}`, headers });
+  const post = (payload, headers = sync) => server.inject({ method: 'POST', url: '/ssacademy/api/imports', headers, payload });
+  try {
+    const other = await post(data(), sessionHeaders);
+    const empty = (await read()).json();
+    assert.equal(empty.data, null);
+    assert.ok(typeof empty.version === 'string' && empty.version.length > 0 && empty.version.length <= 160);
+    assert.deepEqual((await read()).json(), empty);
+    assert.equal((await read(admin)).statusCode, 403);
+    assert.equal((await read(sync, '?source=Tablet&ownerId=owner-a')).statusCode, 400);
+    for (const baseVersion of [null, 0, '', 'x'.repeat(161)]) assert.equal((await post({ ...data(), baseVersion })).statusCode, 400);
+    for (const headers of [admin, { authorization: 'Bearer upload-only', 'x-sync-approved': 'true' }]) {
+      assert.equal((await post({ ...data(), baseVersion: empty.version }, headers)).statusCode, 403);
+    }
+    const original = { ...data().data, pokemons: ['PIKACHU', 'BULBASAUR', 'PIKACHU'] };
+    const attempts = await Promise.all(['Mobile', 'Tablet'].map((source) => post({ source, data: original, baseVersion: empty.version })));
+    assert.deepEqual(attempts.map((response) => response.statusCode).sort(), [201, 409]);
+    assert.equal(store.listImports('administrator').total, 1);
+    const saved = attempts.find((response) => response.statusCode === 201).json();
+    assert.deepEqual(saved.sync.data, { ...original, pokemons: ['BULBASAUR', 'PIKACHU'] });
+    assert.notEqual(saved.sync.version, empty.version);
+    assert.deepEqual(Object.keys(saved.import).sort(), ['format', 'id', 'importedAt', 'source', 'version']);
+    const downloaded = await read();
+    assert.equal(downloaded.headers['cache-control'], 'no-store');
+    assert.deepEqual(downloaded.json(), saved.sync);
+
+    for (const path of ['me', 'schema', 'tokens', 'imports?scope=all', `imports/${saved.import.id}`, `imports/${other.json().import.id}`]) {
+      assert.equal((await server.inject({ url: `/ssacademy/api/${path}`, headers: sync })).statusCode, 403);
+    }
+    const url = `/ssacademy/api/imports/${saved.import.id}`;
+    const edited = { ...original, rewards: {}, pokemons: ['MEW'] };
+    const payload = { revision: 1, data: edited };
+    assert.equal((await server.inject({ method: 'PATCH', url, headers: sync, payload })).statusCode, 403);
+    assert.equal((await server.inject({ method: 'DELETE', url, headers: sync })).statusCode, 403);
+    assert.equal((await server.inject({ method: 'PATCH', url, headers: admin, payload })).statusCode, 200);
+    const corrected = (await read()).json();
+    assert.notEqual(corrected.version, saved.sync.version);
+    assert.deepEqual(corrected.data, edited);
+    const retry = { source: saved.import.source, data: original };
+    assert.equal((await post({ ...retry, baseVersion: saved.sync.version })).statusCode, 409);
+    const duplicate = await post({ ...retry, baseVersion: corrected.version });
+    assert.equal(duplicate.statusCode, 200);
+    assert.deepEqual(duplicate.json().sync, corrected);
+    assert.equal(duplicate.json().duplicate, true);
+    assert.equal(store.listImports('administrator').total, 1);
+
+    const uploadOnly = { authorization: 'Bearer upload-admin' };
+    const archive = { source: 'Archive tablet', data: original };
+    const archived = await post(archive, uploadOnly);
+    assert.equal(archived.statusCode, 201);
+    assert.equal('sync' in archived.json(), false);
+    assert.deepEqual((await read()).json(), corrected);
+    assert.equal((await post(archive, uploadOnly)).json().duplicate, true);
+    assert.deepEqual((await read()).json(), corrected);
+    assert.equal((await server.inject({ url: `/ssacademy/api/imports/${archived.json().import.id}`, headers: admin })).statusCode, 200);
   } finally { await server.close(); }
 });
 
@@ -136,16 +203,20 @@ test('the viewer requires a session and serves only its intended public assets',
   } finally { await server.close(); }
 });
 
-test('mobile enrollment accepts only JSON username/fingerprint pairs without exposing collection data', async () => {
+test('mobile registration accepts sync requests while status requires only the original pair', async () => {
   const server = await buildApp({ store: createStore(), portal, staticDir: false });
   try {
     const payload = { username: 'Mobile user', fingerprintToken: 'a'.repeat(64) };
     const registered = await server.inject({ method: 'POST', url: '/ssacademy/api/devices/register', payload });
     assert.equal(registered.statusCode, 202);
     assert.equal(registered.json().device.status, 'pending');
+    assert.equal(registered.json().device.syncApproved, false);
     assert.equal(registered.headers['cache-control'], 'no-store');
     assert.equal(registered.body.includes(payload.fingerprintToken), false);
     assert.equal((await server.inject({ method: 'POST', url: '/ssacademy/api/devices/status', payload })).statusCode, 200);
+    assert.equal((await server.inject({ method: 'POST', url: '/ssacademy/api/devices/register', payload: { ...payload, requestSync: true } })).statusCode, 202);
+    assert.equal((await server.inject({ method: 'POST', url: '/ssacademy/api/devices/status', payload: { ...payload, requestSync: true } })).statusCode, 400);
+    assert.equal((await server.inject({ method: 'POST', url: '/ssacademy/api/devices/register', payload: { ...payload, syncApproved: true } })).statusCode, 400);
     assert.equal((await server.inject({ method: 'POST', url: '/ssacademy/api/devices/register', payload: { ...payload, status: 'approved' } })).statusCode, 400);
     assert.equal((await server.inject({ method: 'POST', url: '/ssacademy/api/devices/register', payload: { username: 'Mobile user' } })).statusCode, 400);
     assert.equal((await server.inject({ method: 'POST', url: '/ssacademy/api/devices/register', payload: { ...payload, fingerprintToken: 'short' } })).statusCode, 400);
@@ -157,7 +228,7 @@ test('mobile enrollment accepts only JSON username/fingerprint pairs without exp
 });
 
 test('mobile enrollment forwards only the request body and validated browser-origin context', async () => {
-  const payload = { username: 'Mobile user', fingerprintToken: 'b'.repeat(64) };
+  const payload = { username: 'Mobile user', fingerprintToken: 'b'.repeat(64), requestSync: true };
   const client = createPortalClient({ origin: 'http://portal:3000', fetchImpl: async (url, options) => {
     assert.equal(url.href, 'http://portal:3000/api/portal/integrations/ssacademy/devices/register');
     assert.equal(options.method, 'POST');

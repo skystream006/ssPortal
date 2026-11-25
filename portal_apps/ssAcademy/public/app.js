@@ -239,25 +239,29 @@ async function loadTokens() {
       row.querySelector('[data-account]').textContent = device.accountStatus === 'approved' ? device.accountName : device.accountStatus ? `Account ${device.accountStatus}` : 'No portal account';
       row.querySelector('[data-status]').textContent = device.status;
       row.querySelector('[data-status]').classList.add(`device-${device.status}`);
+      const active = device.status === 'approved';
+      const access = active ? (device.syncApproved ? 'Uploads and owner sync' : 'Uploads only') : '';
+      row.querySelector('[data-access]').textContent = [access, device.syncRequested && !device.syncApproved ? 'Owner sync requested' : ''].filter(Boolean).join(' · ');
       row.querySelector('[data-created]').textContent = formatDate(device.createdAt);
       row.querySelector('[data-expires]').textContent = device.expiresAt ? formatDate(device.expiresAt) : 'Not approved';
       row.querySelector('[data-used]').textContent = device.lastUsedAt ? formatDate(device.lastUsedAt) : 'Never';
       const approve = row.querySelector('[data-approve]');
-      approve.hidden = device.status === 'approved';
+      approve.hidden = active && !device.syncRequested;
       approve.disabled = device.accountStatus !== 'approved';
-      approve.setAttribute('aria-label', `Approve ${device.username} (${device.fingerprint})`);
-      approve.title = approve.disabled ? 'The portal account must be approved first' : 'Approve app';
-      approve.addEventListener('click', () => confirm('Approve app?', `${device.username} / ${device.fingerprint}`, 'Approve app', async () => {
-        await api(`/tokens/${encodeURIComponent(device.id)}`, { method: 'PATCH', body: JSON.stringify({ status: 'approved' }) });
-        await loadTokens(); notice('App approved for uploads.');
-      }, false));
+      approve.setAttribute('aria-label', `${active ? 'Change access for' : 'Approve'} ${device.username} (${device.fingerprint})`);
+      approve.title = approve.disabled ? 'The portal account must be approved first' : active ? 'Change app access' : 'Approve app';
+      approve.addEventListener('click', () => confirm(active ? 'Change app access?' : 'Approve app?', `${device.username} / ${device.fingerprint}`, active ? 'Save access' : 'Approve app', async () => {
+        const syncApproved = device.syncRequested === true && byId('grant-sync').checked;
+        await api(`/tokens/${encodeURIComponent(device.id)}`, { method: 'PATCH', body: JSON.stringify({ status: 'approved', syncApproved }) });
+        await loadTokens(); notice(syncApproved ? 'App approved for uploads and owner sync.' : 'App approved for uploads only.');
+      }, false, device.syncRequested ? device.syncApproved : undefined));
       const revoke = row.querySelector('[data-revoke]');
       revoke.hidden = device.status === 'revoked';
       revoke.title = `Revoke ${device.username} (${device.fingerprint})`;
       revoke.setAttribute('aria-label', revoke.title);
       revoke.addEventListener('click', () => confirm('Revoke app access?', `${device.username} / ${device.fingerprint}`, 'Revoke app', async () => {
         await api(`/tokens/${encodeURIComponent(device.id)}`, { method: 'PATCH', body: JSON.stringify({ status: 'revoked' }) });
-        await loadTokens(); notice('App upload access revoked.');
+        await loadTokens(); notice('App access revoked.');
       }));
       const remove = row.querySelector('[data-delete]');
       remove.title = `Delete ${device.username} (${device.fingerprint})`;
@@ -279,10 +283,12 @@ async function loadTokens() {
   finally { if (generation === state.deviceGeneration) byId('refresh-tokens').disabled = false; }
 }
 
-function confirm(title, message, label, action, destructive = true) {
+function confirm(title, message, label, action, destructive = true, syncChoice) {
   state.confirmation = action;
   byId('confirm-title').textContent = title;
   byId('confirm-message').textContent = message;
+  byId('sync-choice').hidden = syncChoice === undefined;
+  byId('grant-sync').checked = syncChoice === true;
   const button = byId('confirm-action');
   button.querySelector('span').textContent = label;
   button.className = destructive ? 'danger-button' : 'primary-button';

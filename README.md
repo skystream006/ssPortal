@@ -29,7 +29,7 @@ Browser: https://localhost:4125
 
 Containers share the host kernel, so separating apps does not incur VM-sized overhead. The PHP apps reuse a common cached runtime layer. A single combined container would save a little process overhead but couple dependency versions, upgrades, failures, permissions, and scaling. It is not the recommended structure here. Actual resource use depends on the hosted apps and workload.
 
-The portal does not iframe, rewrite, or fork Grocy or webtrees. Their own authentication and APIs remain intact. webtrees does not advertise a general REST API here; its native routes stay under `/webtrees/`. The included ssAcademy data server shares portal identities and provides its own scoped upload API and data viewer.
+The portal does not iframe, rewrite, or fork Grocy or webtrees. Their own authentication and APIs remain intact. webtrees does not advertise a general REST API here; its native routes stay under `/webtrees/`. The included ssAcademy data server shares portal identities and provides its own scoped collection API and data viewer.
 
 ## Start
 
@@ -92,7 +92,7 @@ This console-authorized step prevents a first visitor from claiming administrato
 - Sessions use random, server-side-hashed tokens in HttpOnly, SameSite=Strict cookies. HTTPS enables the Secure flag. They expire after `SESSION_DAYS` (30 by default).
 - Registration/login challenges are browser-bound, single-use, expire after five minutes, and require authenticator user verification. Mutation requests must match the configured origin; passkey endpoints are rate-limited.
 - The dashboard/API and every request under `/grocy/` and `/webtrees/` require an approved portal session. All approved portal users have access to those launch paths, but the apps' native accounts and permissions still apply. This is a shared access gate, **not application-account SSO**.
-- Grocy/webtrees native API keys alone do not bypass the gateway; their APIs also require a portal session cookie. ssAcademy separately supports upload-only tokens for its JSON ingestion endpoint, without granting access to the other apps or portal administration.
+- Grocy/webtrees native API keys alone do not bypass the gateway; their APIs also require a portal session cookie. ssAcademy app tokens allow uploads by default, or owner-only collection sync with a separate administrator grant. Neither grants access to the other apps or portal administration.
 - Revocation blocks subsequent requests; it does not erase previously rendered browser content or terminate requests/streams already in flight.
 
 ### Recovery
@@ -121,9 +121,9 @@ The HTTPS Compose override sets `PASSKEY_ORIGIN` to `https://<PASSKEY_RP_ID>`. W
 
 Open ssAcademy from Applications to import and view collection data exported by the Android app. Parsed balances and animation identifiers are stored as database rows, not export files. Members see their own imports; administrators can choose **All users** and **Edit values** to adjust reward balances and animation IDs with revision checks.
 
-For mobile uploads, the app registers its `username` and private per-installation `fingerprintToken` at `POST /ssacademy/api/devices/register`. An administrator approves the request in **ssAcademy > Upload tokens > App approvals**. The same token then authorizes upload-only requests for 90 days, with explicit revocation/reapproval. Tokens are hashed; no biometric data is used. The server no longer generates upload tokens, and legacy generated tokens must be replaced through registration and approval. Existing accounts and imported data are preserved.
+For mobile uploads, the app registers its `username` and private per-installation `fingerprintToken` at `POST /ssacademy/api/devices/register`. An administrator approves the request in **ssAcademy > Upload tokens > App approvals**. Approval lasts 90 days and is upload-only by default, including for previously approved devices. If the app requests sync, an administrator can separately allow it to download and sync **only that account’s latest collection**. Requests never grant access or renew approval. Tokens are hashed; no biometric data is used. Old server-generated tokens must be replaced through registration and approval. Existing accounts and imported data are preserved.
 
-The verified upstream export is `ssAcademy-collections` version 1, which contains rewards and collected animations, not practice history, reading progress, or PINs. Administration changes server records only; they are not pushed to Android devices. See [portal_apps/ssAcademy/README.md](portal_apps/ssAcademy/README.md) for the API request format, permissions, validation limits, and backup instructions.
+The verified upstream export is `ssAcademy-collections` version 1, which contains rewards and collected animations, not practice history, reading progress, or PINs. The first version-checked sync pins the account's collection. Later ordinary uploads remain browsable without replacing it. Admin edits to the pinned collection are visible on the next authorized sync; the server does not push to devices. See [portal_apps/ssAcademy/README.md](portal_apps/ssAcademy/README.md) for the API request format, permissions, validation limits, and backup instructions.
 
 ## Themes
 

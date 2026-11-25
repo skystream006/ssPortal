@@ -45,6 +45,11 @@ export async function buildApp({
     requireSession(request);
     if (request.identity.user.role !== 'admin') throw inputError('Administrator access is required for app approvals.', 403);
   };
+  const requireSync = (request) => {
+    if (request.identity.authType !== 'device-token' || request.identity.syncApproved !== true) {
+      throw inputError('An app token approved for owner sync is required.', 403);
+    }
+  };
 
   const deviceBody = {
     type: 'object', additionalProperties: false, required: ['username', 'fingerprintToken'],
@@ -54,8 +59,9 @@ export async function buildApp({
     },
   };
   for (const action of ['register', 'status']) {
+    const body = action === 'register' ? { ...deviceBody, properties: { ...deviceBody.properties, requestSync: { enum: [true, false] } } } : deviceBody;
     server.post(`${base}/api/devices/${action}`, {
-      bodyLimit: 1024, schema: { body: deviceBody }, config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
+      bodyLimit: 1024, schema: { body }, config: { rateLimit: { max: 10, timeWindow: '1 minute' } },
     }, async (request, reply) => {
       reply.header('Cache-Control', 'no-store');
       if (request.headers['content-type']?.split(';')[0].trim().toLowerCase() !== 'application/json') throw inputError('Send device details as application/json.', 415);
@@ -69,12 +75,18 @@ export async function buildApp({
       reply.header('Cache-Control', 'no-store');
       request.identity = await portal.identify(request.headers);
       const tokenUpload = request.method === 'POST' && request.routeOptions.url === `${base}/api/imports`;
-      if (request.identity.authType === 'device-token' && !tokenUpload) throw inputError('This app token can only upload ssAcademy exports.', 403);
+      const tokenSyncRead = request.method === 'GET' && request.routeOptions.url === `${base}/api/sync`;
+      if (request.identity.authType === 'device-token' && !tokenUpload && !tokenSyncRead) throw inputError('App tokens cannot access this endpoint.', 403);
       if (!['GET', 'HEAD'].includes(request.method) && request.identity.authType === 'session') requireOrigin(request);
     });
 
     routes.get('/me', async (request) => ({ user: request.identity.user, format: FORMAT, version: VERSION }));
     routes.get('/schema', async () => ({ format: FORMAT, version: VERSION, maxExportBytes: MAX_EXPORT_BYTES, maxWhole: MAX_WHOLE, rewards: REWARDS, upstreamRevision: UPSTREAM_REVISION }));
+    routes.get('/sync', async (request) => {
+      requireSync(request);
+      if (Object.keys(request.query).length) throw inputError('Sync does not accept filters or owner selectors.');
+      return store.getSync(request.identity.user.id);
+    });
     routes.get('/imports', async (request) => {
       const allowed = ['search', 'source', 'page', 'pageSize', 'scope'];
       if (Object.keys(request.query).some((key) => !allowed.includes(key))) throw inputError('Unknown import filter.');
@@ -86,10 +98,13 @@ export async function buildApp({
     routes.get('/imports/:id', async (request) => ({ import: store.getImport(request.identity.user.id, request.params.id, request.identity.user.role === 'admin') }));
     routes.post('/imports', { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async (request, reply) => {
       if (request.headers['content-type']?.split(';')[0].trim().toLowerCase() !== 'application/json') throw inputError('Send export data as application/json, not an uploaded file.', 415);
+      if (Object.hasOwn(request.body ?? {}, 'baseVersion')) requireSync(request);
       const result = store.importData(request.identity.user.id, request.body, request.identity.user.name);
       reply.header('Location', `${base}/api/imports/${result.import.id}`);
       const { id, source, format, version, importedAt } = result.import;
-      const response = request.identity.authType === 'device-token' ? { duplicate: result.duplicate, import: { id, source, format, version, importedAt } } : result;
+      const response = request.identity.authType === 'device-token'
+        ? { duplicate: result.duplicate, import: { id, source, format, version, importedAt }, ...(result.sync ? { sync: result.sync } : {}) }
+        : result;
       return reply.code(result.duplicate ? 200 : 201).send(response);
     });
     routes.patch('/imports/:id', async (request) => {

@@ -66,6 +66,104 @@ test('duplicate imports are idempotent regardless of reward and animation orderi
   } finally { store.close(); }
 });
 
+test('legacy uploads can supply the initial fallback but cannot select or invalidate a pinned head', () => {
+  let clock = 10;
+  const store = createStore({ now: () => clock });
+  const input = (pokemon) => ({ source: 'Tablet', data: { ...sample().data, pokemons: [pokemon] } });
+  const read = () => store.getSync('member');
+  const upload = (payload) => store.importData('member', payload);
+  try {
+    const a = input('BULBASAUR'), b = input('PIKACHU'), c = input('MEW');
+    upload(a);
+    const initial = read();
+    clock = 20;
+    const newest = upload(b).import;
+    const fallback = read();
+    assert.deepEqual(fallback.data, b.data);
+    assert.notEqual(fallback.version, initial.version);
+    assert.equal(upload(a).duplicate, true);
+    assert.deepEqual(read(), fallback);
+    clock = 5;
+    upload(input('TOGEPI'));
+    assert.deepEqual(read(), fallback);
+
+    const pinned = upload({ ...b, baseVersion: fallback.version });
+    assert.equal(pinned.duplicate, true);
+    assert.deepEqual(pinned.sync.data, b.data);
+    assert.notEqual(pinned.sync.version, fallback.version);
+    assert.equal(upload(a).duplicate, true);
+    assert.deepEqual(read(), pinned.sync);
+    clock = 30;
+    const archived = upload(c);
+    assert.equal(archived.duplicate, false);
+    assert.deepEqual(store.getImport('member', archived.import.id).animations, c.data.pokemons);
+    assert.deepEqual(read(), pinned.sync);
+    assert.throws(() => upload({ ...c, baseVersion: fallback.version }), { statusCode: 409 });
+
+    store.deleteImport('member', newest.id);
+    const replacement = read();
+    assert.deepEqual(replacement.data, c.data);
+    assert.notEqual(replacement.version, pinned.sync.version);
+    clock = 40;
+    upload(input('DITTO'));
+    assert.deepEqual(read(), replacement);
+  } finally { store.close(); }
+});
+
+test('sync starts from preexisting imports and orders duplicate promotions and deletions without reusing versions', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'ssacademy-sync-'));
+  const path = join(directory, 'academy.sqlite');
+  let clock = 0;
+  let store = createStore({ path, now: () => ++clock });
+  try {
+    const a = sample();
+    const b = { ...sample(), data: { ...sample().data, pokemons: ['MEW'] } };
+    const first = store.importData('member', a).import;
+    const second = store.importData('member', b).import;
+    store.close();
+    const oldSchema = new DatabaseSync(path);
+    try { oldSchema.exec('DROP INDEX imports_sync_head; ALTER TABLE imports DROP COLUMN sync_order; DROP TABLE collection_pins; DROP TABLE collection_versions;'); }
+    finally { oldSchema.close(); }
+    store = createStore({ path });
+    const latest = store.getSync('member');
+    assert.deepEqual(latest.data, validateExport(b.data));
+    const promoted = store.importData('member', { ...a, baseVersion: latest.version });
+    assert.equal(promoted.duplicate, true);
+    assert.equal(promoted.import.id, first.id);
+    assert.deepEqual(promoted.sync.data, validateExport(a.data));
+    assert.equal(store.listImports('member').total, 2);
+    assert.notEqual(promoted.sync.version, latest.version);
+    store.close();
+    store = createStore({ path });
+    assert.deepEqual(store.getSync('member'), promoted.sync);
+    const selectedB = store.importData('member', { ...b, baseVersion: promoted.sync.version });
+    const replay = store.importData('member', { ...a, baseVersion: selectedB.sync.version });
+    assert.equal(replay.import.id, first.id);
+    assert.deepEqual(replay.sync.data, promoted.sync.data);
+    assert.notEqual(replay.sync.version, promoted.sync.version);
+    assert.throws(() => store.importData('member', { ...b, baseVersion: promoted.sync.version }), { statusCode: 409 });
+    store.deleteImport('member', first.id);
+    const remaining = store.getSync('member');
+    assert.deepEqual(remaining.data, latest.data);
+    assert.notEqual(remaining.version, latest.version);
+    assert.throws(() => store.importData('member', { ...a, baseVersion: latest.version }), { statusCode: 409 });
+    store.deleteImport('member', second.id);
+    assert.equal(store.getSync('member').data, null);
+    const empty = store.getSync('member');
+    const legacy = store.importData('member', a);
+    assert.deepEqual(store.getSync('member'), empty);
+    assert.equal('sync' in legacy, false);
+    const reseeded = store.importData('member', { ...a, baseVersion: empty.version }).sync;
+    assert.deepEqual(reseeded.data, promoted.sync.data);
+    const archived = store.importData('member', b);
+    assert.deepEqual(store.getSync('member'), reseeded);
+    store.deleteImport('member', archived.import.id);
+    store.deleteImport('member', legacy.import.id);
+    assert.throws(() => store.importData('member', { ...b, baseVersion: empty.version }), { statusCode: 409 });
+    assert.equal(store.listImports('member').total, 0);
+  } finally { store.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
 test('owners cannot read or delete other users data and failed validation changes nothing', () => {
   const store = createStore();
   try {
@@ -145,11 +243,13 @@ test('a failed database write rolls back edited values, revisions, and edit meta
   try {
     const original = store.importData('member', sample()).import;
     database.exec("CREATE TRIGGER fail_animation BEFORE INSERT ON collected_animations BEGIN SELECT RAISE(ABORT, 'fixture failure'); END");
+    const before = store.getSync('member');
     const changed = sample().data;
     changed.rewards.LOLLIPOP.whole = 9;
     assert.throws(() => store.updateImport({ id: 'administrator', role: 'admin' }, original.id, { revision: 1, data: changed }), /fixture failure/);
     assert.deepEqual(store.getImport('member', original.id), original);
     assert.throws(() => store.importData('member', { ...sample(), source: 'Failed import' }), /fixture failure/);
     assert.equal(store.listImports('member').total, 1);
+    assert.deepEqual(store.getSync('member'), before);
   } finally { database.close(); store.close(); await rm(directory, { recursive: true, force: true }); }
 });

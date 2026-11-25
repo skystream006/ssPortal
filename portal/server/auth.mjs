@@ -89,20 +89,25 @@ export async function registerAuth(server, { store, config, apps, webauthn = sim
   });
   const objectBody = (properties = {}, required = []) => ({ type: 'object', additionalProperties: false, properties, required });
 
-  const deviceBody = objectBody({ username: nameSchema, fingerprintToken: { type: 'string', minLength: 32, maxLength: 256, pattern: '^[A-Za-z0-9_-]+$' } }, ['username', 'fingerprintToken']);
+  const devicePair = { username: nameSchema, fingerprintToken: { type: 'string', minLength: 32, maxLength: 256, pattern: '^[A-Za-z0-9_-]+$' } };
+  const syncFlag = { enum: [true, false] };
   const deviceRequestOptions = {
-    bodyLimit: 1024, schema: { body: deviceBody },
+    bodyLimit: 1024,
     config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
     preHandler: async (request) => { if (request.headers.origin !== undefined) await requireOrigin(request); },
   };
-  const deviceStatus = ({ id, username, fingerprint, status, expiresAt }) => ({ id, username, fingerprint, status, expiresAt });
+  const deviceStatus = ({ id, username, fingerprint, status, expiresAt, syncApproved }) => ({ id, username, fingerprint, status, expiresAt, syncApproved });
 
-  server.post('/api/portal/integrations/ssacademy/devices/register', deviceRequestOptions, async (request, reply) => {
-    const result = store.registerAcademyDevice(request.body.username, request.body.fingerprintToken);
+  server.post('/api/portal/integrations/ssacademy/devices/register', {
+    ...deviceRequestOptions, schema: { body: objectBody({ ...devicePair, requestSync: syncFlag }, Object.keys(devicePair)) },
+  }, async (request, reply) => {
+    const result = store.registerAcademyDevice(request.body.username, request.body.fingerprintToken, request.body.requestSync);
     return reply.code(result.created ? 202 : 200).send({ device: deviceStatus(result.device) });
   });
 
-  server.post('/api/portal/integrations/ssacademy/devices/status', deviceRequestOptions, async (request) => ({
+  server.post('/api/portal/integrations/ssacademy/devices/status', {
+    ...deviceRequestOptions, schema: { body: objectBody(devicePair, Object.keys(devicePair)) },
+  }, async (request) => ({
     device: deviceStatus(store.getAcademyDeviceStatus(request.body.username, request.body.fingerprintToken)),
   }));
 
@@ -115,7 +120,8 @@ export async function registerAuth(server, { store, config, apps, webauthn = sim
       authType = 'device-token';
     }
     if (!user) throw authError(401, 'A portal session or approved ssAcademy app token is required.', 'SIGN_IN_REQUIRED');
-    return { user: { id: user.id, name: user.name, role: user.role }, authType, origin: config.origin };
+    return { user: { id: user.id, name: user.name, role: user.role }, authType, origin: config.origin,
+      ...(authType === 'device-token' ? { syncApproved: user.syncApproved } : {}) };
   });
 
   server.get('/api/portal/integrations/ssacademy/tokens', { preHandler: requireAdmin }, async (request) => {
@@ -123,8 +129,8 @@ export async function registerAuth(server, { store, config, apps, webauthn = sim
     return store.listAcademyDevices(request.user.id, request.query);
   });
 
-  server.patch('/api/portal/integrations/ssacademy/tokens/:id', routeOptions(objectBody({ status: { enum: ['approved', 'revoked'] } }, ['status']), requireAdmin), async (request) => {
-    return { device: store.updateAcademyDevice(request.user.id, request.params.id, request.body.status) };
+  server.patch('/api/portal/integrations/ssacademy/tokens/:id', routeOptions(objectBody({ status: { enum: ['approved', 'revoked'] }, syncApproved: syncFlag }, ['status']), requireAdmin), async (request) => {
+    return { device: store.updateAcademyDevice(request.user.id, request.params.id, request.body.status, request.body.syncApproved) };
   });
 
   server.delete('/api/portal/integrations/ssacademy/tokens/:id', { preHandler: [requireOrigin, requireAdmin] }, async (request, reply) => {
