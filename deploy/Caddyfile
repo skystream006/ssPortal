@@ -1,0 +1,50 @@
+{
+  admin off
+  auto_https disable_redirects
+  skip_install_trust
+}
+
+(portal_session) {
+  forward_auth portal:3000 {
+    uri /api/portal/auth/check
+  }
+}
+
+http://:80 {
+  header -Server
+  redir {$PUBLIC_ORIGIN:https://localhost:4125}{uri} 308
+}
+
+{$PORTAL_ADDRESS:https://localhost} {
+  import /config/portal-tls.caddy
+  encode zstd gzip
+  header -Server
+
+  @grocy_root path /grocy
+  redir @grocy_root /grocy/?{query} 308
+
+  @webtrees_root path /webtrees
+  redir @webtrees_root /webtrees/?{query} 308
+
+  handle /healthz {
+    respond "ok" 200
+  }
+
+  handle /grocy/* {
+    import portal_session
+    reverse_proxy grocy:80
+  }
+
+  handle /webtrees/* {
+    import portal_session
+    reverse_proxy webtrees:80
+  }
+
+  handle {
+    reverse_proxy {$PORTAL_UPSTREAM:portal:3000}
+  }
+}
+
+http://:2015 {
+  respond /healthz "ok" 200
+}

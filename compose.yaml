@@ -1,0 +1,152 @@
+name: ssportal
+
+services:
+  gateway:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/etc/caddy/gateway-entrypoint.sh"]
+    environment:
+      PORTAL_ADDRESS: "https://${PORTAL_HOST:-localhost}"
+      PUBLIC_ORIGIN: "${PASSKEY_ORIGIN:-https://${PORTAL_HOST:-localhost}:${HTTPS_WEB_PORT:-4125}}"
+      HTTPS_MODE: "${HTTPS_MODE:-local}"
+      HTTPS_KEY_PATH: "${HTTPS_KEY_PATH:-}"
+      HTTPS_CERT_PATH: "${HTTPS_CERT_PATH:-}"
+    ports:
+      - "${PORTAL_BIND:-127.0.0.1}:${PORTAL_PORT:-8080}:80"
+      - "${PORTAL_BIND:-127.0.0.1}:${HTTPS_WEB_PORT:-4125}:443"
+      - "${PORTAL_BIND:-127.0.0.1}:${HTTPS_WEB_PORT:-4125}:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./deploy/gateway-entrypoint.sh:/etc/caddy/gateway-entrypoint.sh:ro
+      - ./certificates:/certificates:ro
+      - gateway_data:/data
+      - gateway_config:/config
+    depends_on:
+      portal:
+        condition: service_started
+      grocy:
+        condition: service_started
+      webtrees:
+        condition: service_started
+    networks:
+      - applications
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:2015/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  portal:
+    build:
+      context: .
+      dockerfile: portal/Dockerfile
+    restart: unless-stopped
+    init: true
+    environment:
+      HOST: 0.0.0.0
+      PORT: 3000
+      NODE_ENV: production
+      AUTH_DB_PATH: /app/data/auth.sqlite
+      PASSKEY_ORIGIN: "${PASSKEY_ORIGIN:-https://${PORTAL_HOST:-localhost}:${HTTPS_WEB_PORT:-4125}}"
+      PASSKEY_RP_ID: "${PASSKEY_RP_ID:-}"
+      ALLOW_REGISTRATION: "${ALLOW_REGISTRATION:-true}"
+      SESSION_DAYS: "${SESSION_DAYS:-30}"
+    volumes:
+      - ./portal/config/apps.json:/app/config/apps.json:ro
+      - portal_data:/app/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - applications
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/portal/health').then(response => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  grocy:
+    build:
+      context: .
+      dockerfile: deploy/php/Dockerfile
+      target: grocy
+    restart: unless-stopped
+    environment:
+      GROCY_BASE_PATH: /grocy
+      GROCY_BASE_URL: /grocy
+      GROCY_MODE: production
+      GROCY_DEFAULT_LOCALE: en
+    volumes:
+      - grocy_data:/var/www/grocy/data
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/run/apache2
+      - /var/lock/apache2
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - applications
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--max-time", "4", "--output", "/dev/null", "http://127.0.0.1/grocy/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  webtrees:
+    build:
+      context: .
+      dockerfile: deploy/php/Dockerfile
+      target: webtrees
+    restart: unless-stopped
+    volumes:
+      - webtrees_data:/var/www/webtrees/data
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/run/apache2
+      - /var/lock/apache2
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - applications
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--max-time", "4", "--output", "/dev/null", "http://127.0.0.1/webtrees/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  applications:
+
+volumes:
+  gateway_data:
+  gateway_config:
+  portal_data:
+  grocy_data:
+  webtrees_data:

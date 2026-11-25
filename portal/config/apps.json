@@ -1,0 +1,28 @@
+[
+  {
+    "id": "grocy",
+    "name": "Grocy",
+    "description": "Groceries, meal plans, and the everyday details of home.",
+    "category": "Household",
+    "path": "/grocy/",
+    "apiPath": "/grocy/api/",
+    "healthUrl": "http://grocy/grocy/",
+    "icon": "shopping-basket",
+    "color": "green",
+    "runtime": "PHP 8.5 / SQLite",
+    "source": "grocy/"
+  },
+  {
+    "id": "webtrees",
+    "name": "webtrees",
+    "description": "Family connections, shared stories, and generations of history.",
+    "category": "Genealogy",
+    "path": "/webtrees/",
+    "apiPath": null,
+    "healthUrl": "http://webtrees/webtrees/",
+    "icon": "network",
+    "color": "blue",
+    "runtime": "PHP 8.5 / SQLite or MySQL",
+    "source": "webtrees/"
+  }
+]

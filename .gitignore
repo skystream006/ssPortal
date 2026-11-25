@@ -1,0 +1,8 @@
+grocy/
+webtrees/
+.env
+.env.*
+!.envexample
+backups/
+certificates/
+*.log
