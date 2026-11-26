@@ -34,7 +34,7 @@ export function normalizeSource(value) {
 }
 
 export function validateExport(input) {
-  object(input, ['format', 'version', 'rewards', 'pokemons'], 'ssAcademy export object');
+  object(input, ['format', 'version', 'rewards', 'pokemons', 'settings'], 'ssAcademy export object');
   if (input.format !== FORMAT) throw inputError(`Expected format "${FORMAT}".`);
   if (input.version !== VERSION) throw inputError('Only ssAcademy collections export version 1 is supported.');
   object(input.rewards, [...rewardIds], 'reward balances');
@@ -55,10 +55,12 @@ export function validateExport(input) {
   for (const id of input.pokemons) {
     if (typeof id !== 'string' || !/^[A-Z][A-Z0-9_]{0,99}$/.test(id)) throw inputError('Animation identifiers must be uppercase enum names of at most 100 characters.');
   }
-  return { format: FORMAT, version: VERSION, rewards, pokemons: [...new Set(input.pokemons)].sort() };
+  return { format: FORMAT, version: VERSION, rewards, pokemons: [...new Set(input.pokemons)].sort(),
+    ...(input.settings === undefined ? {} : { settings: validateSettings(input.settings) }) };
 }
 
 export function validateImport(input) {
   object(input, ['source', 'data'], 'import request');
   return { source: normalizeSource(input.source), data: validateExport(input.data) };
 }
+import { validateSettings } from './settings.mjs';

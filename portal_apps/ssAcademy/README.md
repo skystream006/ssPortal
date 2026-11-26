@@ -8,14 +8,16 @@ The app icon is a 256 x 256 PNG resized without cropping from the [upstream Andr
 
 ## Supported Data
 
-The contract was verified against upstream revision `0f603630936f58d2546448cbb5968a6bd989a997`, specifically `CollectionBackup` and `RewardBalance`.
+The original collection contract was verified against upstream revision `0f603630936f58d2546448cbb5968a6bd989a997`, specifically `CollectionBackup` and `RewardBalance`. The sync payload additionally supports an optional settings snapshot shared with the Android client.
 
 - Format `ssAcademy-collections`, version `1`.
-- Exports contain reward balances and animation identifiers in `pokemons`. They do **not** contain practice history, reading progress, device settings, the local user's name, or the Admin PIN.
+- Exports contain reward balances and animation identifiers in `pokemons`. Sync snapshots can additionally contain whitelisted game, reward, and appearance preferences in `settings`. They do **not** contain practice history, reading progress/content, local names, Admin PIN/PIN-lock settings, portal credentials/device identity, debug logging, or app-update settings.
 - Whole rewards must be integers from 0 to 715827881; fragments must be integers from 0 to 2. Missing balance fields default to zero.
 - Supported rewards: `LOLLIPOP`, `ICE_CREAM`, `GUMMI_BEAR`, `RAMEN`, `BED_TIME`, `VIDEO_GAME`, `RESTAURANT`, `TOYS_1`, `TOYS_2`, `TOYS_3`, `GOOD_BEHAVIOR_POINT`.
 - Animation identifiers are uppercase enum-name strings, up to 100 characters, containing letters, digits, and underscores. They are syntax-checked rather than tied to a copied artwork catalog, allowing future animation IDs within version 1. Duplicate identifiers are deduplicated.
 - Export data is limited to 256 KiB and 2048 animation entries. Unsupported versions, unknown fields/reward types, and invalid balances are rejected before writes.
+- `settings` is an optional flat object of supported preference keys with typed values (booleans, integers, enum strings, or string sets). Invalid/unknown settings and secrets are rejected. Keys and sets are normalized for stable deduplication; settings participate in the snapshot checksum.
+- An absent `settings` field means a legacy collection-only snapshot and must not reset local settings. An explicit empty object means the app's default settings with no saved overrides.
 
 ## View and Edit
 
@@ -24,6 +26,8 @@ Open **ssAcademy** from the portal. **Collections** provides search, source filt
 **Appearance settings** in the header offers the portal's seven color themes and Light, Dark, and System modes. Both apps use the same palettes and browser-local preference, with changes synchronized across open tabs. **Reset appearance** restores Green and System without changing other portal preferences.
 
 Members can view and delete their own imports. Administrators can select **All users**, open any collection, and choose **Edit values** to change whole/fragment balances and animation IDs. Source labels, owners, schema versions, and original import metadata are not editable. Deletion remains owner-scoped, including for administrators.
+
+Import details display **Synced app settings** when present. Settings travel in the same owned upload/download as collections, including settings-only snapshots. Changes to supported Android preferences queue a sync; replacing a downloaded snapshot restores its settings, while merging collections preserves the device's local settings. Collection-only files and legacy server snapshots preserve local settings. The portal's reward/animation editor preserves saved settings; the settings table itself is read-only.
 
 Edits are transactional and revision-checked. Stale forms receive HTTP 409 instead of overwriting newer changes. The current and original checksums, revision, editor ID, edit time, and checksum audit metadata are retained. Audit metadata does not include copies of the original file or previous values, so automatic undo is not provided.
 
@@ -133,6 +137,8 @@ Authorization: Bearer <server-generated bearerToken>
 
 `source` is a required 1-80 character label. `data` is the parsed export object. Do not send multipart/form-data, a file name, or base64 file contents.
 
+For settings sync, include `"settings": { "show_timer": true, "text_size_percent": 120 }` alongside `rewards` and `pokemons` in `data`. The owned import detail/download response returns the same optional `settings` object. The upload receipt does not include settings values.
+
 New uploads return **201**; identical owner/source/data retries return **200** with `duplicate: true`. Token responses contain a receipt only, without collection values:
 
 ```json
@@ -216,7 +222,7 @@ Errors use `{ "error": "..." }`: 400 invalid data, 401 unauthenticated/unapprove
 
 The `ssacademy` Compose service uses Node.js 24, Fastify, SQLite, and a small browser-native UI. Icons/fonts are local, and theme colors are copied from the portal when building the image.
 
-The `ssportal_ssacademy_data` volume contains `/app/data/academy.sqlite` and WAL/SHM files. Tables are `imports`, `reward_balances`, `collected_animations`, and `import_edits`. Device hashes and approval metadata live separately in `academy_devices` in the portal identity database. Deleting a portal account removes its linked registrations and prevents access, but does not automatically erase its imported records.
+The `ssportal_ssacademy_data` volume contains `/app/data/academy.sqlite` and WAL/SHM files. Tables are `imports`, `reward_balances`, `collected_animations`, `import_settings`, and `import_edits`. Settings are stored as parsed per-key values, not a raw export blob; existing imports migrate without settings. Device hashes and approval metadata live separately in `academy_devices` in the portal identity database. Deleting a portal account removes its linked registrations and prevents access, but does not automatically erase its imported records.
 
 The portal creates a private 32-byte delivery key beside its authentication database at `<AUTH_DB_PATH>.sync-key` (Docker: `/app/data/auth.sqlite.sync-key`). Back up and restore it with the auth database. Do not commit or expose this key. A missing or mismatched key fails closed for pending deliveries; restore it, or revoke all pending credentials before generating replacements. Already-delivered bearer authentication uses its stored hash and does not require this key.
 

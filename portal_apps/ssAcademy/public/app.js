@@ -139,6 +139,14 @@ function renderDetails(record) {
     }
     byId('rewards-body').append(row);
   }
+  byId('synced-settings-body').replaceChildren();
+  for (const [key, value] of Object.entries(record.settings ?? {})) {
+    const row = document.createElement('tr');
+    const label = document.createElement('td'); label.textContent = key;
+    const setting = document.createElement('td'); setting.textContent = JSON.stringify(value);
+    row.append(label, setting); byId('synced-settings-body').append(row);
+  }
+  byId('settings-empty').hidden = record.settings === undefined || Object.keys(record.settings).length > 0;
   byId('search-animations').value = '';
   byId('edit-values').hidden = state.user.role !== 'admin';
   byId('delete-import').hidden = record.ownerId !== state.user.id;
@@ -151,6 +159,7 @@ function setEditMode(editing) {
   byId('edit-form').hidden = !editing;
   byId('detail-read-view').hidden = editing;
   byId('detail-read-actions').hidden = editing;
+  byId('synced-settings-view').hidden = editing || state.detail.settings === undefined;
   if (!editing) state.editing = null;
   dialogError(byId('detail-dialog'), null);
 }

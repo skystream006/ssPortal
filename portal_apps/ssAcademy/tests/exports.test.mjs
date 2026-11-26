@@ -27,6 +27,49 @@ test('validates the upstream collections format and reward-balance limits', () =
   }
 });
 
+test('validates optional settings without accepting secrets or changing legacy exports', () => {
+  const input = sample().data;
+  assert.equal('settings' in validateExport(input), false);
+  assert.deepEqual(validateExport({ ...input, settings: {} }).settings, {});
+  const settings = { show_timer: true, text_size_percent: 120, disabled_rewards: ['TOYS_3', 'TOYS_1', 'TOYS_1'] };
+  assert.deepEqual(validateExport({ ...input, settings }).settings, {
+    disabled_rewards: ['TOYS_1', 'TOYS_3'], show_timer: true, text_size_percent: 120,
+  });
+  for (const settings of [null, [], { show_timer: 'true' }, { text_size_percent: 10000 },
+    { disabled_rewards: ['INVALID_REWARD'] }, { admin_pin: '1234' }, { admin_pin_lock_enabled: false },
+    { bearerToken: 'secret' }, { game_name: 'Local identity' }, { unknown_setting: true }]) {
+    assert.throws(() => validateExport({ ...input, settings }), { statusCode: 400 });
+  }
+});
+
+test('settings round-trip across restarts and collection edits preserve their snapshot', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'ssacademy-settings-'));
+  const path = join(directory, 'academy.sqlite');
+  let store = createStore({ path });
+  try {
+    const settings = { show_timer: true, text_size_percent: 120 };
+    const payload = { ...sample(), data: { ...sample().data, settings } };
+    const original = store.importData('owner-a', payload).import;
+    assert.equal(store.importData('owner-a', { ...payload, data: { ...payload.data, settings: { text_size_percent: 120, show_timer: true } } }).duplicate, true);
+    assert.notEqual(store.importData('owner-a', sample()).import.id, original.id);
+    assert.notEqual(store.importData('owner-a', { ...payload, data: { ...payload.data, settings: {} } }).import.id, original.id);
+    store.close();
+    store = createStore({ path });
+    assert.deepEqual(store.getImport('owner-a', original.id).settings, settings);
+    const changed = sample().data;
+    changed.rewards.LOLLIPOP.whole = 8;
+    const edited = store.updateImport({ id: 'administrator', role: 'admin' }, original.id, { revision: 1, data: changed });
+    assert.deepEqual(edited.settings, settings);
+    const cleared = store.updateImport({ id: 'administrator', role: 'admin' }, original.id, { revision: 2, data: { ...changed, settings: {} } });
+    assert.deepEqual(cleared.settings, {});
+    const database = new DatabaseSync(path, { readOnly: true });
+    try {
+      assert.equal(database.prepare('SELECT count(*) AS count FROM import_settings WHERE import_id = ?').get(original.id).count, 0);
+      assert.equal(database.prepare('SELECT has_settings FROM imports WHERE id = ?').get(original.id).has_settings, 1);
+    } finally { database.close(); }
+  } finally { store.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
 test('persists normalized rows rather than the export file and survives restart', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'ssacademy-'));
   const path = join(directory, 'academy.sqlite');
@@ -143,9 +186,10 @@ test('a failed database write rolls back edited values, revisions, and edit meta
   const store = createStore({ path });
   const database = new DatabaseSync(path);
   try {
-    const original = store.importData('member', sample()).import;
+    const original = store.importData('member', { ...sample(), data: { ...sample().data, settings: { show_timer: true } } }).import;
     database.exec("CREATE TRIGGER fail_animation BEFORE INSERT ON collected_animations BEGIN SELECT RAISE(ABORT, 'fixture failure'); END");
     const changed = sample().data;
+    changed.settings = { show_timer: false };
     changed.rewards.LOLLIPOP.whole = 9;
     assert.throws(() => store.updateImport({ id: 'administrator', role: 'admin' }, original.id, { revision: 1, data: changed }), /fixture failure/);
     assert.deepEqual(store.getImport('member', original.id), original);

@@ -26,6 +26,11 @@ export function createStore({ path = ':memory:', now = Date.now } = {}) {
       import_id TEXT NOT NULL REFERENCES imports(id) ON DELETE CASCADE,
       animation_id TEXT NOT NULL, PRIMARY KEY(import_id, animation_id)
     );
+    CREATE TABLE IF NOT EXISTS import_settings (
+      import_id TEXT NOT NULL REFERENCES imports(id) ON DELETE CASCADE,
+      setting_key TEXT NOT NULL, setting_value TEXT NOT NULL,
+      PRIMARY KEY(import_id, setting_key)
+    );
     CREATE TABLE IF NOT EXISTS import_edits (
       import_id TEXT NOT NULL REFERENCES imports(id) ON DELETE CASCADE,
       revision INTEGER NOT NULL, editor_id TEXT NOT NULL, edited_at INTEGER NOT NULL,
@@ -35,7 +40,7 @@ export function createStore({ path = ':memory:', now = Date.now } = {}) {
   `);
 
   const columns = new Set(database.prepare("SELECT name FROM pragma_table_info('imports')").all().map((column) => column.name));
-  for (const [name, type] of Object.entries({ current_sha256: 'TEXT', revision: 'INTEGER NOT NULL DEFAULT 1', updated_at: 'INTEGER', updated_by: 'TEXT', owner_name: 'TEXT' })) {
+  for (const [name, type] of Object.entries({ current_sha256: 'TEXT', revision: 'INTEGER NOT NULL DEFAULT 1', updated_at: 'INTEGER', updated_by: 'TEXT', owner_name: 'TEXT', has_settings: 'INTEGER NOT NULL DEFAULT 0' })) {
     if (!columns.has(name)) database.exec(`ALTER TABLE imports ADD COLUMN ${name} ${type}`);
   }
   database.exec('UPDATE imports SET current_sha256 = sha256 WHERE current_sha256 IS NULL');
@@ -60,7 +65,11 @@ export function createStore({ path = ':memory:', now = Date.now } = {}) {
     const rewards = database.prepare('SELECT reward_type AS id, whole, fragments FROM reward_balances WHERE import_id = ? ORDER BY reward_type').all(id);
     const animations = database.prepare('SELECT animation_id FROM collected_animations WHERE import_id = ? ORDER BY animation_id').all(id).map((row) => row.animation_id);
     const edits = database.prepare('SELECT revision, editor_id AS editorId, edited_at AS editedAt, previous_sha256 AS previousSha256, current_sha256 AS sha256 FROM import_edits WHERE import_id = ? ORDER BY revision DESC').all(id);
-    return { ...record, rewards: rewards.map((balance) => ({ ...REWARDS.find((reward) => reward.id === balance.id), ...balance })), animations, edits };
+    const hasSettings = database.prepare('SELECT has_settings FROM imports WHERE id = ?').get(id).has_settings;
+    const settings = hasSettings ? Object.fromEntries(database.prepare('SELECT setting_key, setting_value FROM import_settings WHERE import_id = ? ORDER BY setting_key')
+      .all(id).map((row) => [row.setting_key, JSON.parse(row.setting_value)])) : undefined;
+    return { ...record, rewards: rewards.map((balance) => ({ ...REWARDS.find((reward) => reward.id === balance.id), ...balance })), animations, edits,
+      ...(settings === undefined ? {} : { settings }) };
   }
 
   function writeRecords(id, data) {
@@ -68,6 +77,10 @@ export function createStore({ path = ':memory:', now = Date.now } = {}) {
     for (const [type, balance] of Object.entries(data.rewards)) rewardInsert.run(id, type, balance.whole, balance.fragments);
     const animationInsert = database.prepare('INSERT INTO collected_animations VALUES (?, ?)');
     for (const animation of data.pokemons) animationInsert.run(id, animation);
+    if (data.settings !== undefined) {
+      const settingInsert = database.prepare('INSERT INTO import_settings VALUES (?, ?, ?)');
+      for (const [key, value] of Object.entries(data.settings)) settingInsert.run(id, key, JSON.stringify(value));
+    }
   }
 
   function importData(ownerId, input, ownerName = ownerId) {
@@ -78,8 +91,8 @@ export function createStore({ path = ':memory:', now = Date.now } = {}) {
       const existing = database.prepare('SELECT id FROM imports WHERE owner_id = ? AND source = ? AND sha256 = ?').get(ownerId, source, digest);
       if (existing) return { duplicate: true, import: getImport(ownerId, existing.id) };
       const id = randomUUID();
-      database.prepare('INSERT INTO imports (id, owner_id, source, format, version, sha256, created_at, current_sha256, owner_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        .run(id, ownerId, source, data.format, data.version, digest, now(), digest, ownerName);
+      database.prepare('INSERT INTO imports (id, owner_id, source, format, version, sha256, created_at, current_sha256, owner_name, has_settings) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(id, ownerId, source, data.format, data.version, digest, now(), digest, ownerName, data.settings === undefined ? 0 : 1);
       writeRecords(id, data);
       return { duplicate: false, import: getImport(ownerId, id) };
     });
@@ -90,18 +103,20 @@ export function createStore({ path = ':memory:', now = Date.now } = {}) {
     if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some((key) => !['revision', 'data'].includes(key))
       || !Number.isSafeInteger(input.revision) || input.revision < 1) throw inputError('Provide the current revision and updated collection data.');
     const data = validateExport(input.data);
-    const digest = createHash('sha256').update(JSON.stringify(data)).digest('hex');
     return transaction(() => {
       const previous = getImport(actor.id, id, true);
       if (previous.revision !== input.revision) throw inputError('This collection changed. Close and reopen its details before editing again.', 409);
+      const replacement = data.settings === undefined && previous.settings !== undefined ? { ...data, settings: previous.settings } : data;
+      const digest = createHash('sha256').update(JSON.stringify(replacement)).digest('hex');
       if (previous.sha256 === digest) return previous;
       database.prepare('DELETE FROM reward_balances WHERE import_id = ?').run(id);
       database.prepare('DELETE FROM collected_animations WHERE import_id = ?').run(id);
-      writeRecords(id, data);
+      database.prepare('DELETE FROM import_settings WHERE import_id = ?').run(id);
+      writeRecords(id, replacement);
       const revision = previous.revision + 1;
       const timestamp = now();
-      database.prepare('UPDATE imports SET current_sha256 = ?, revision = ?, updated_at = ?, updated_by = ? WHERE id = ?')
-        .run(digest, revision, timestamp, actor.id, id);
+      database.prepare('UPDATE imports SET current_sha256 = ?, revision = ?, updated_at = ?, updated_by = ?, has_settings = ? WHERE id = ?')
+        .run(digest, revision, timestamp, actor.id, replacement.settings === undefined ? 0 : 1, id);
       database.prepare('INSERT INTO import_edits VALUES (?, ?, ?, ?, ?, ?)').run(id, revision, actor.id, timestamp, previous.sha256, digest);
       return getImport(actor.id, id, true);
     });

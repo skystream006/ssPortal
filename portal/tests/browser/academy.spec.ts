@@ -293,13 +293,16 @@ test('ssAcademy rejects invalid imports and reads local files as JSON data, neve
 });
 
 test('ssAcademy administrators edit another owner values without losing import identity', async ({ page, academy }, testInfo) => {
-  const original = academy.store.importData('learner-owner', { source: 'Student tablet', data: exportData }, 'Learner').import;
+  const settings = { show_timer: true, text_size_percent: 120 };
+  const original = academy.store.importData('learner-owner', { source: 'Student tablet', data: { ...exportData, settings } }, 'Learner').import;
   await page.goto('/ssacademy/');
   await expect(page.getByRole('heading', { name: 'No collection exports' })).toBeVisible();
   await page.getByRole('checkbox', { name: 'All users', exact: true }).check();
   await expect(page.locator('#imports-body')).toContainText('Learner');
   await page.getByRole('button', { name: 'View Student tablet', exact: true }).first().click();
   const detail = page.getByRole('dialog', { name: 'Student tablet', exact: true });
+  await expect(detail.getByRole('table', { name: 'Synced app settings' })).toContainText('show_timer');
+  await expect(detail.getByRole('table', { name: 'Synced app settings' })).toContainText('120');
   await expect(detail.getByRole('button', { name: 'Delete import', exact: true })).not.toBeVisible();
   await detail.getByRole('button', { name: 'Edit values', exact: true }).click();
   await detail.getByRole('spinbutton', { name: 'Lollipop whole', exact: true }).fill('12');
@@ -315,7 +318,8 @@ test('ssAcademy administrators edit another owner values without losing import i
   const restored = (await (await page.request.get(`${academy.origin}/ssacademy/api/imports/${original.id}`)).json()).import;
   expect(restored.importedSha256).toBe(original.sha256);
   expect(restored.ownerId).toBe('learner-owner');
-  expect(academy.store.importData('learner-owner', { source: 'Student tablet', data: exportData }).import.revision).toBe(2);
+  expect(restored.settings).toEqual(settings);
+  expect(academy.store.importData('learner-owner', { source: 'Student tablet', data: { ...exportData, settings } }).import.revision).toBe(2);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 

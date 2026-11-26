@@ -55,6 +55,25 @@ test('device tokens cannot list collections, delete, or manage tokens; session w
   } finally { await server.close(); }
 });
 
+test('device uploads include settings in owned downloads but not their receipt', async () => {
+  const server = await buildApp({ store: createStore(), portal, staticDir: false });
+  try {
+    const token = { authorization: 'Bearer approved' };
+    const payload = data();
+    payload.data.rewards = {};
+    payload.data.pokemons = [];
+    payload.data.settings = { show_timer: true, text_size_percent: 120 };
+    const uploaded = await server.inject({ method: 'POST', url: '/ssacademy/api/imports', headers: token, payload });
+    assert.equal(uploaded.statusCode, 201);
+    const receipt = uploaded.json().import;
+    assert.equal('settings' in receipt, false);
+    const downloaded = await server.inject({ url: `/ssacademy/api/imports/${receipt.id}`, headers: token });
+    assert.equal(downloaded.statusCode, 200);
+    assert.deepEqual(downloaded.json().import.settings, payload.data.settings);
+    assert.equal((await server.inject({ url: `/ssacademy/api/imports/${receipt.id}`, headers: { cookie: 'other-session' } })).statusCode, 404);
+  } finally { await server.close(); }
+});
+
 test('approved device tokens can download only their own imports without a browser session', async () => {
   const store = createStore();
   const own = store.importData('owner-a', data()).import;
