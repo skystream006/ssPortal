@@ -70,6 +70,37 @@ test('settings round-trip across restarts and collection edits preserve their sn
   } finally { store.close(); await rm(directory, { recursive: true, force: true }); }
 });
 
+test('sync replaces the latest historical snapshot in place and persists across restart', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'ssacademy-sync-'));
+  const path = join(directory, 'academy.sqlite');
+  let timestamp = 1000;
+  let store = createStore({ path, now: () => ++timestamp });
+  try {
+    const historical = store.importData('owner-a', sample()).import;
+    const newer = sample();
+    newer.data.rewards.LOLLIPOP.whole = 8;
+    const current = store.importData('owner-a', newer).import;
+    store.close();
+    store = createStore({ path, now: () => ++timestamp });
+    const changed = sample();
+    changed.data.settings = {};
+    const result = store.importData('owner-a', changed, 'Learner', { sync: true });
+    assert.equal(result.updated, true);
+    assert.equal(result.import.id, current.id);
+    assert.equal(result.import.importedAt, current.importedAt);
+    assert.equal(result.import.importedSha256, current.importedSha256);
+    assert.equal(result.import.revision, 2);
+    assert.equal(result.import.updatedBy, 'owner-a');
+    assert.equal(result.import.edits[0].previousSha256, current.sha256);
+    assert.deepEqual(store.getImport('owner-a', historical.id), historical);
+    assert.equal(store.listImports('owner-a').total, 2);
+    store.close();
+    store = createStore({ path });
+    assert.deepEqual(store.getImport('owner-a', current.id), result.import);
+    assert.equal(store.importData('owner-a', changed, 'Learner', { sync: true }).duplicate, true);
+  } finally { store.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
 test('persists normalized rows rather than the export file and survives restart', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'ssacademy-'));
   const path = join(directory, 'academy.sqlite');
@@ -192,6 +223,8 @@ test('a failed database write rolls back edited values, revisions, and edit meta
     changed.settings = { show_timer: false };
     changed.rewards.LOLLIPOP.whole = 9;
     assert.throws(() => store.updateImport({ id: 'administrator', role: 'admin' }, original.id, { revision: 1, data: changed }), /fixture failure/);
+    assert.deepEqual(store.getImport('member', original.id), original);
+    assert.throws(() => store.importData('member', { ...sample(), data: changed }, 'Member', { sync: true }), /fixture failure/);
     assert.deepEqual(store.getImport('member', original.id), original);
     assert.throws(() => store.importData('member', { ...sample(), source: 'Failed import' }), /fixture failure/);
     assert.equal(store.listImports('member').total, 1);

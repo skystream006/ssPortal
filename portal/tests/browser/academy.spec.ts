@@ -180,17 +180,25 @@ test('ssAcademy fingerprint apps require admin approval, stay upload-only, and c
   const uploaded = await request.post(`${academy.origin}/ssacademy/api/imports`, { headers, data: { source: 'Uploaded via API', data: exportData } });
   expect(uploaded.status()).toBe(201);
   const id = (await uploaded.json()).import.id;
+  const synced = await request.post(`${academy.origin}/ssacademy/api/imports`, { headers, data: {
+    source: 'Uploaded via API', data: { ...exportData, rewards: { LOLLIPOP: { whole: 9, fragments: 1 } } },
+  } });
+  expect(synced.status()).toBe(200);
+  expect((await synced.json()).import.id).toBe(id);
   expect((await request.get(`${academy.origin}/ssacademy/api/imports`, { headers })).status()).toBe(403);
   expect((await request.delete(`${academy.origin}/ssacademy/api/imports/${id}`, { headers })).status()).toBe(403);
   academy.store.importData('different-owner', { source: 'Private other user', data: exportData });
   await page.getByRole('link', { name: 'Collections', exact: true }).click();
-  await expect(page.locator('#imports-body tr')).toHaveCount(1);
-  await expect(page.locator('#imports-body')).not.toContainText('Private other user');
+  await expect(page.locator('#imports-body tr')).toHaveCount(2);
+  await expect(page.locator('#imports-body')).toContainText('Private other user');
   await page.getByRole('button', { name: 'View Uploaded via API', exact: true }).first().click();
   const detail = page.getByRole('dialog', { name: 'Uploaded via API', exact: true });
+  await expect(detail.locator('#detail-revision')).toHaveText('2');
+  await expect(detail.getByRole('table', { name: 'Reward balances' }).getByRole('row').filter({ hasText: 'Lollipop' }).getByRole('cell')).toHaveText(['Lollipop', '1', '9', '1']);
   await detail.getByRole('button', { name: 'Delete import', exact: true }).click();
   await page.getByRole('dialog', { name: 'Delete imported data?' }).getByRole('button', { name: 'Delete import', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'No collection exports' })).toBeVisible();
+  await expect(page.locator('#imports-body tr')).toHaveCount(1);
+  await expect(page.locator('#imports-body')).toContainText('Private other user');
   await page.getByRole('link', { name: 'Sync Tokens', exact: true }).click();
   await expect(page.locator('#tokens-body')).toContainText('Test administrator');
   await page.screenshot({ path: testInfo.outputPath('academy-tokens.png'), fullPage: true, animations: 'disabled' });
@@ -263,8 +271,6 @@ test('ssAcademy approves accountless students and keeps their uploads isolated',
   expect((await request.get(`${academy.origin}/ssacademy/api/imports/${id}`, { headers })).status()).toBe(401);
   expect((await request.get(`${academy.origin}/ssacademy/api/imports/${id}`, { headers: { authorization: `Bearer ${replacement}` } })).status()).toBe(200);
   await page.getByRole('link', { name: 'Collections', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'No collection exports' })).toBeVisible();
-  await page.getByRole('checkbox', { name: 'All users', exact: true }).check();
   await expect(page.locator('#imports-body')).toContainText(student);
   await expect(page.locator('#imports-body b')).toHaveCount(0);
   await page.getByRole('button', { name: 'View Independent student tablet', exact: true }).first().click();
@@ -296,8 +302,9 @@ test('ssAcademy administrators edit another owner values without losing import i
   const settings = { show_timer: true, text_size_percent: 120 };
   const original = academy.store.importData('learner-owner', { source: 'Student tablet', data: { ...exportData, settings } }, 'Learner').import;
   await page.goto('/ssacademy/');
-  await expect(page.getByRole('heading', { name: 'No collection exports' })).toBeVisible();
-  await page.getByRole('checkbox', { name: 'All users', exact: true }).check();
+  await expect(page.getByRole('checkbox', { name: 'All users', exact: true })).toHaveCount(0);
+  await expect(page.locator('#imports-body')).toContainText('Learner');
+  await page.reload();
   await expect(page.locator('#imports-body')).toContainText('Learner');
   await page.getByRole('button', { name: 'View Student tablet', exact: true }).first().click();
   const detail = page.getByRole('dialog', { name: 'Student tablet', exact: true });

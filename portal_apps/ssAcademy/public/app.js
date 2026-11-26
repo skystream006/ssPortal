@@ -68,7 +68,7 @@ async function loadImports() {
   state.loading = true;
   byId('refresh-imports').disabled = true;
   byId('imports-body').setAttribute('aria-busy', 'true');
-  const allUsers = state.user?.role === 'admin' && byId('all-users').checked;
+  const allUsers = state.user?.role === 'admin';
   const query = new URLSearchParams({ page: String(state.page), pageSize: String(state.pageSize), search: byId('search-imports').value.trim(), source: byId('source-filter').value, scope: allUsers ? 'all' : 'mine' });
   try {
     const result = await api(`/imports?${query}`);
@@ -362,7 +362,6 @@ byId('next-device-page').addEventListener('click', () => { if (state.devicePage 
 let searchTimer;
 byId('search-imports').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { state.page = 1; void loadImports(); }, 200); });
 byId('source-filter').addEventListener('change', () => { state.page = 1; void loadImports(); });
-byId('all-users').addEventListener('change', () => { state.page = 1; byId('source-filter').value = ''; void loadImports(); });
 byId('page-size').addEventListener('change', () => { state.pageSize = Number(byId('page-size').value); state.page = 1; void loadImports(); });
 byId('previous-page').addEventListener('click', () => { if (state.page > 1) { state.page--; void loadImports(); } });
 byId('next-page').addEventListener('click', () => { if (state.page * state.pageSize < state.total) { state.page++; void loadImports(); } });
@@ -383,5 +382,5 @@ function changeView() {
 }
 window.addEventListener('hashchange', changeView);
 icons();
-try { const profile = await api('/me'); state.user = profile.user; byId('user-name').textContent = profile.user.name; byId('all-users-control').hidden = profile.user.role !== 'admin'; byId('tokens-link').hidden = profile.user.role !== 'admin'; changeView(); }
+try { const profile = await api('/me'); state.user = profile.user; byId('user-name').textContent = profile.user.name; byId('tokens-link').hidden = profile.user.role !== 'admin'; changeView(); }
 catch (error) { notice(error.message, true); }

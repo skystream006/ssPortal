@@ -25,13 +25,13 @@ Open **ssAcademy** from the portal. **Collections** provides search, source filt
 
 **Appearance settings** in the header offers the portal's seven color themes and Light, Dark, and System modes. Both apps use the same palettes and browser-local preference, with changes synchronized across open tabs. **Reset appearance** restores Green and System without changing other portal preferences.
 
-Members can view and delete their own imports. Administrators can select **All users**, open any collection, and choose **Edit values** to change whole/fragment balances and animation IDs. Source labels, owners, schema versions, and original import metadata are not editable. Deletion remains owner-scoped, including for administrators.
+Members can view and delete their own imports. Administrators always see all owners' records, can open any collection, and choose **Edit values** to change whole/fragment balances and animation IDs. Source labels, owners, schema versions, and original import metadata are not editable. Deletion remains owner-scoped, including for administrators.
 
 Import details display **Synced app settings** when present. Settings travel in the same owned upload/download as collections, including settings-only snapshots. Changes to supported Android preferences queue a sync; replacing a downloaded snapshot restores its settings, while merging collections preserves the device's local settings. Collection-only files and legacy server snapshots preserve local settings. The portal's reward/animation editor preserves saved settings; the settings table itself is read-only.
 
 Edits are transactional and revision-checked. Stale forms receive HTTP 409 instead of overwriting newer changes. The current and original checksums, revision, editor ID, edit time, and checksum audit metadata are retained. Audit metadata does not include copies of the original file or previous values, so automatic undo is not provided.
 
-Re-uploading the same original data with the same source label and owner returns the existing record and preserves administrative corrections. A different source export creates another snapshot. Edits affect this server only; there is no automatic sync back to Android.
+Manual browser imports remain snapshots: re-uploading the same original data with the same source label and owner returns the existing record and preserves administrative corrections; different data creates another snapshot. Device-token syncs instead replace the latest record for the same owner and source label, preserving its ID and original import metadata. Changed syncs increment the revision and record checksum audit metadata; identical current-data retries do not change the record. Incoming sync values overwrite administrative corrections. Missing settings preserve saved settings; explicit `{}` resets them to defaults. Existing historical snapshots are retained. Different owners or source labels remain separate. Edits affect this server only; there is no automatic sync back to Android.
 
 ## App Approval and Sync Tokens
 
@@ -49,7 +49,7 @@ Approval lasts 90 days. **Generate bearer token** on an approved registration pr
 
 Approved tokens can upload ssAcademy data and download an owned import by ID. They cannot list collections, browse the viewer, edit, delete, manage tokens/users, or access other portal apps. Downloads remain owner-scoped even for tokens linked to administrators.
 
-Without a linked portal account, imports belong to a stable app-registration owner ID and display the student name. Separate registrations remain isolated even if they use the same student name; creating a matching portal account later does not transfer their imports. Administrators can view and edit these imports through **Collections > All users**. Deleting a registration invalidates its token; re-registering creates a new owner and does not regain access to the old imports.
+Without a linked portal account, imports belong to a stable app-registration owner ID and display the student name. Separate registrations remain isolated even if they use the same student name; creating a matching portal account later does not transfer their imports. Administrators always see and can edit these imports through **Collections**. Deleting a registration invalidates its token; re-registering creates a new owner and does not regain access to the old imports.
 
 Registrations that match an existing portal account retain that optional account link and its import ownership, including after an account rename. Existing registrations and imports are preserved. Account revocation, role changes, deletion, or recovery still invalidate linked devices; approving an account again does not revive its devices. Token approval itself does not require that linked account to be approved.
 
@@ -139,7 +139,7 @@ Authorization: Bearer <server-generated bearerToken>
 
 For settings sync, include `"settings": { "show_timer": true, "text_size_percent": 120 }` alongside `rewards` and `pokemons` in `data`. The owned import detail/download response returns the same optional `settings` object. The upload receipt does not include settings values.
 
-New uploads return **201**; identical owner/source/data retries return **200** with `duplicate: true`. Token responses contain a receipt only, without collection values:
+New records return **201**. Device syncs replacing an existing owner/source record return **200** with `duplicate: false` and `updated: true`; identical current-data retries return **200** with `duplicate: true`. Manual imports deduplicate against the original owner/source/data. Token responses contain a receipt only, without collection or settings values:
 
 ```json
 {
@@ -185,7 +185,7 @@ These endpoints require an approved portal browser-session cookie, except the im
 | --- | --- |
 | `GET /ssacademy/api/me` | Current user |
 | `GET /ssacademy/api/schema` | Format, version, reward catalog, and limits |
-| `GET /ssacademy/api/imports` | Own snapshots |
+| `GET /ssacademy/api/imports` | All owners' records for administrators; own records for members |
 | `GET /ssacademy/api/imports?scope=all` | Administrator-only all-owner list |
 | `GET /ssacademy/api/imports/:id` | Values and edit metadata; browser owner/admin or approved owner device token |
 | `PATCH /ssacademy/api/imports/:id` | Administrator-only value editing |
@@ -194,7 +194,7 @@ These endpoints require an approved portal browser-session cookie, except the im
 | `PATCH /ssacademy/api/tokens/:id` | Administrator-only approval/rotation or revocation using `{ "status": "approved" }` or `{ "status": "revoked" }` |
 | `DELETE /ssacademy/api/tokens/:id` | Administrator-only registration deletion; immediately removes upload access |
 
-Import listing supports `search`, `source`, `page` (default 1), and `pageSize` (default 25, maximum 100). Default scope is `mine`. Timestamps are Unix milliseconds.
+Import listing supports `search`, `source`, `page` (default 1), and `pageSize` (default 25, maximum 100). Administrators always receive all owners' records, including with legacy `scope=mine` requests. Members receive only their own records and cannot request `scope=all`. Timestamps are Unix milliseconds.
 
 App registration listing returns `{ devices, total, page, pageSize }` and accepts `search` (literal student substring), `status` (empty for all, or `pending`, `approved`, `revoked`, `expired`), `page` (default 1), and `pageSize` (default 50, maximum 100). Approval requires a signed-in portal administrator, not a portal account for the student.
 

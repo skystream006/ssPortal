@@ -83,11 +83,37 @@ export function createStore({ path = ':memory:', now = Date.now } = {}) {
     }
   }
 
-  function importData(ownerId, input, ownerName = ownerId) {
+  function replaceImport(previous, data, editorId) {
+    const replacement = data.settings === undefined && previous.settings !== undefined ? { ...data, settings: previous.settings } : data;
+    const digest = createHash('sha256').update(JSON.stringify(replacement)).digest('hex');
+    if (previous.sha256 === digest) return previous;
+    const id = previous.id;
+    database.prepare('DELETE FROM reward_balances WHERE import_id = ?').run(id);
+    database.prepare('DELETE FROM collected_animations WHERE import_id = ?').run(id);
+    database.prepare('DELETE FROM import_settings WHERE import_id = ?').run(id);
+    writeRecords(id, replacement);
+    const revision = previous.revision + 1;
+    const timestamp = now();
+    database.prepare('UPDATE imports SET current_sha256 = ?, revision = ?, updated_at = ?, updated_by = ?, has_settings = ? WHERE id = ?')
+      .run(digest, revision, timestamp, editorId, replacement.settings === undefined ? 0 : 1, id);
+    database.prepare('INSERT INTO import_edits VALUES (?, ?, ?, ?, ?, ?)').run(id, revision, editorId, timestamp, previous.sha256, digest);
+    return getImport(previous.ownerId, id);
+  }
+
+  function importData(ownerId, input, ownerName = ownerId, { sync = false } = {}) {
     if (typeof ownerId !== 'string' || !ownerId) throw inputError('An authenticated owner is required.', 401);
     const { source, data } = validateImport(input);
     const digest = createHash('sha256').update(JSON.stringify(data)).digest('hex');
     return transaction(() => {
+      if (sync) {
+        const current = database.prepare('SELECT id FROM imports WHERE owner_id = ? AND source = ? ORDER BY created_at DESC, id DESC LIMIT 1').get(ownerId, source);
+        if (current) {
+          const previous = getImport(ownerId, current.id);
+          const record = replaceImport(previous, data, ownerId);
+          const updated = record.revision !== previous.revision;
+          return { duplicate: !updated, updated, import: record };
+        }
+      }
       const existing = database.prepare('SELECT id FROM imports WHERE owner_id = ? AND source = ? AND sha256 = ?').get(ownerId, source, digest);
       if (existing) return { duplicate: true, import: getImport(ownerId, existing.id) };
       const id = randomUUID();
@@ -106,19 +132,7 @@ export function createStore({ path = ':memory:', now = Date.now } = {}) {
     return transaction(() => {
       const previous = getImport(actor.id, id, true);
       if (previous.revision !== input.revision) throw inputError('This collection changed. Close and reopen its details before editing again.', 409);
-      const replacement = data.settings === undefined && previous.settings !== undefined ? { ...data, settings: previous.settings } : data;
-      const digest = createHash('sha256').update(JSON.stringify(replacement)).digest('hex');
-      if (previous.sha256 === digest) return previous;
-      database.prepare('DELETE FROM reward_balances WHERE import_id = ?').run(id);
-      database.prepare('DELETE FROM collected_animations WHERE import_id = ?').run(id);
-      database.prepare('DELETE FROM import_settings WHERE import_id = ?').run(id);
-      writeRecords(id, replacement);
-      const revision = previous.revision + 1;
-      const timestamp = now();
-      database.prepare('UPDATE imports SET current_sha256 = ?, revision = ?, updated_at = ?, updated_by = ?, has_settings = ? WHERE id = ?')
-        .run(digest, revision, timestamp, actor.id, replacement.settings === undefined ? 0 : 1, id);
-      database.prepare('INSERT INTO import_edits VALUES (?, ?, ?, ?, ?, ?)').run(id, revision, actor.id, timestamp, previous.sha256, digest);
-      return getImport(actor.id, id, true);
+      return replaceImport(previous, data, actor.id);
     });
   }
 

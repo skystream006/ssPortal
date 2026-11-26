@@ -74,6 +74,53 @@ test('device uploads include settings in owned downloads but not their receipt',
   } finally { await server.close(); }
 });
 
+test('device sync replaces the current owned source record and identical retries do not revise it', async () => {
+  const store = createStore();
+  const other = store.importData('owner-b', data()).import;
+  const server = await buildApp({ store, portal, staticDir: false });
+  const token = { authorization: 'Bearer approved' };
+  const upload = payload => server.inject({ method: 'POST', url: '/ssacademy/api/imports', headers: token, payload });
+  try {
+    const first = await upload(data());
+    assert.equal(first.statusCode, 201);
+    const id = first.json().import.id;
+    const changed = data();
+    changed.data.rewards = { TOYS_1: { whole: 7, fragments: 0 } };
+    changed.data.pokemons = ['BULBASAUR'];
+    changed.data.settings = { show_timer: true };
+    const response = await upload(changed);
+    assert.equal(response.statusCode, 200);
+    assert.deepEqual(response.json(), { duplicate: false, updated: true, import: first.json().import });
+    assert.equal(response.headers.location, `/ssacademy/api/imports/${id}`);
+    const record = (await server.inject({ url: `/ssacademy/api/imports/${id}`, headers: token })).json().import;
+    assert.equal(record.revision, 2);
+    assert.equal(record.rewards.length, 1);
+    assert.equal(record.rewards[0].id, 'TOYS_1');
+    assert.equal(record.rewards[0].whole, 7);
+    assert.deepEqual(record.animations, ['BULBASAUR']);
+    assert.deepEqual(record.settings, { show_timer: true });
+    const stored = store.getImport('owner-a', id);
+    assert.equal(store.listImports('owner-a').total, 1);
+    assert.deepEqual(store.getImport('owner-b', other.id), other);
+    const retry = await upload(changed);
+    assert.equal(retry.statusCode, 200);
+    assert.equal(retry.json().duplicate, true);
+    assert.deepEqual(store.getImport('owner-a', id), stored);
+    assert.equal((await upload({ ...changed, data: { ...changed.data, settings: { show_timer: 'invalid' } } })).statusCode, 400);
+    assert.deepEqual(store.getImport('owner-a', id), stored);
+    const stale = await server.inject({ method: 'PATCH', url: `/ssacademy/api/imports/${id}`, headers: { cookie: 'admin-session', origin }, payload: { revision: 1, data: data().data } });
+    assert.equal(stale.statusCode, 409);
+    const restored = await upload(data());
+    assert.equal(restored.statusCode, 200);
+    assert.equal(restored.json().duplicate, false);
+    assert.equal(restored.json().import.id, id);
+    assert.equal(store.getImport('owner-a', id).revision, 3);
+    assert.deepEqual(store.getImport('owner-a', id).settings, { show_timer: true });
+    assert.equal((await upload({ ...data(), source: 'Second tablet' })).statusCode, 201);
+    assert.equal(store.listImports('owner-a').total, 2);
+  } finally { await server.close(); }
+});
+
 test('approved device tokens can download only their own imports without a browser session', async () => {
   const store = createStore();
   const own = store.importData('owner-a', data()).import;
@@ -157,7 +204,8 @@ test('only admin browser sessions can alter values and inspect all owners', asyn
     assert.equal((await server.inject({ method: 'PATCH', url, headers: { ...adminHeaders, authorization: 'Bearer upload-only' }, payload })).statusCode, 403);
     assert.equal((await server.inject({ method: 'PATCH', url, headers: { ...adminHeaders, origin: 'https://evil.example' }, payload })).statusCode, 403);
     assert.equal((await server.inject({ url: '/ssacademy/api/imports?scope=all', headers: sessionHeaders })).statusCode, 403);
-    assert.equal((await server.inject({ url: '/ssacademy/api/imports', headers: adminHeaders })).json().total, 0);
+    assert.equal((await server.inject({ url: '/ssacademy/api/imports', headers: adminHeaders })).json().total, 1);
+    assert.equal((await server.inject({ url: '/ssacademy/api/imports?scope=mine', headers: adminHeaders })).json().total, 1);
     assert.equal((await server.inject({ url: '/ssacademy/api/imports?scope=all', headers: adminHeaders })).json().total, 1);
     const edited = await server.inject({ method: 'PATCH', url, headers: adminHeaders, payload });
     assert.equal(edited.statusCode, 200);
@@ -167,10 +215,9 @@ test('only admin browser sessions can alter values and inspect all owners', asyn
     assert.equal((await server.inject({ url, headers: sessionHeaders })).json().import.rewards[0].whole, 12);
     assert.equal((await server.inject({ method: 'PATCH', url, headers: adminHeaders, payload })).statusCode, 409);
     assert.equal((await server.inject({ method: 'PATCH', url, headers: adminHeaders, payload: { revision: 2, data: { ...changed, rewards: { LOLLIPOP: { whole: -1 } } } } })).statusCode, 400);
-    const duplicate = await server.inject({ method: 'POST', url: '/ssacademy/api/imports', headers: { authorization: 'Bearer upload-only' }, payload: data() });
+    const duplicate = await server.inject({ method: 'POST', url: '/ssacademy/api/imports', headers: sessionHeaders, payload: data() });
     assert.equal(duplicate.json().duplicate, true);
-    assert.equal('rewards' in duplicate.json().import, false);
-    assert.equal('whole' in duplicate.json().import, false);
+    assert.equal(duplicate.json().import.rewards[0].whole, 12);
     assert.equal(store.getImport('owner-a', original.id).revision, 2);
   } finally { await server.close(); }
 });

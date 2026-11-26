@@ -82,18 +82,18 @@ export async function buildApp({
       const { scope = 'mine', ...filters } = request.query;
       if (!['mine', 'all'].includes(scope)) throw inputError('Invalid import scope.');
       if (scope === 'all' && request.identity.user.role !== 'admin') throw inputError('Administrator access is required.', 403);
-      return store.listImports(request.identity.user.id, filters, scope === 'all');
+      return store.listImports(request.identity.user.id, filters, request.identity.user.role === 'admin');
     });
     routes.get('/imports/:id', async (request) => ({
       import: store.getImport(request.identity.user.id, request.params.id, request.identity.authType === 'session' && request.identity.user.role === 'admin'),
     }));
     routes.post('/imports', { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async (request, reply) => {
       if (request.headers['content-type']?.split(';')[0].trim().toLowerCase() !== 'application/json') throw inputError('Send export data as application/json, not an uploaded file.', 415);
-      const result = store.importData(request.identity.user.id, request.body, request.identity.user.name);
+      const result = store.importData(request.identity.user.id, request.body, request.identity.user.name, { sync: request.identity.authType === 'device-token' });
       reply.header('Location', `${base}/api/imports/${result.import.id}`);
       const { id, source, format, version, importedAt } = result.import;
-      const response = request.identity.authType === 'device-token' ? { duplicate: result.duplicate, import: { id, source, format, version, importedAt } } : result;
-      return reply.code(result.duplicate ? 200 : 201).send(response);
+      const response = request.identity.authType === 'device-token' ? { duplicate: result.duplicate, ...(result.updated ? { updated: true } : {}), import: { id, source, format, version, importedAt } } : result;
+      return reply.code(result.duplicate || result.updated ? 200 : 201).send(response);
     });
     routes.patch('/imports/:id', async (request) => {
       requireSession(request);
