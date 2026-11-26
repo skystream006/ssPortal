@@ -207,10 +207,12 @@ test('ssAcademy mobile enrollment waits for administrator approval and grants up
     const member = register(store, 'Mobile user');
     store.updateUser(user.id, member.id, { status: 'approved' });
     const fingerprintToken = randomBytes(32).toString('hex');
-    const payload = { username: member.name, fingerprintToken };
+    const payload = { student: member.name, fingerprintToken };
     const registered = await server.inject({ method: 'POST', url: `${path}/devices/register`, payload });
     assert.equal(registered.statusCode, 202);
     assert.equal(registered.json().device.status, 'pending');
+    assert.equal(registered.json().device.student, member.name);
+    assert.equal('username' in registered.json().device, false);
     assert.equal(registered.body.includes(fingerprintToken), false);
     assert.equal('userId' in registered.json().device, false);
     const id = registered.json().device.id;
@@ -224,6 +226,8 @@ test('ssAcademy mobile enrollment waits for administrator approval and grants up
     assert.equal(denied.statusCode, 403);
     const approved = await server.inject({ method: 'PATCH', url: `${path}/tokens/${id}`, headers, payload: { status: 'approved' } });
     assert.equal(approved.statusCode, 200);
+    assert.equal(approved.json().device.student, member.name);
+    assert.equal('username' in approved.json().device, false);
     const identity = await server.inject({ url: `${path}/identity`, headers: authorization });
     assert.equal(identity.json().user.id, member.id);
     assert.equal(identity.json().authType, 'device-token');
@@ -233,9 +237,14 @@ test('ssAcademy mobile enrollment waits for administrator approval and grants up
     assert.equal((await server.inject({ url: `${path}/tokens`, headers: authorization })).statusCode, 401);
     const listing = await server.inject({ url: `${path}/tokens`, headers });
     assert.equal(listing.json().devices.length, 1);
+    assert.equal(listing.json().devices[0].student, member.name);
+    assert.equal('username' in listing.json().devices[0], false);
     assert.equal(listing.body.includes(fingerprintToken), false);
     assert.equal(listing.body.includes('token_hash'), false);
-    assert.equal((await server.inject({ method: 'POST', url: `${path}/devices/status`, payload })).json().device.status, 'approved');
+    const status = (await server.inject({ method: 'POST', url: `${path}/devices/status`, payload })).json().device;
+    assert.equal(status.status, 'approved');
+    assert.equal(status.student, member.name);
+    assert.equal('username' in status, false);
     assert.equal((await server.inject({ method: 'PATCH', url: `${path}/tokens/${id}`, headers, payload: { status: 'revoked' } })).statusCode, 200);
     assert.equal((await server.inject({ url: `${path}/identity`, headers: authorization })).statusCode, 401);
     assert.equal((await server.inject({ method: 'POST', url: `${path}/devices/register`, payload })).json().device.status, 'revoked');
@@ -250,17 +259,25 @@ test('ssAcademy enrollment validates bodies, rejects untrusted browser origins, 
   const path = '/api/portal/integrations/ssacademy/devices';
   const fingerprintToken = randomBytes(32).toString('hex');
   try {
-    for (const payload of [{ username: 'Mobile user' }, { username: 'Mobile user', fingerprintToken: 'short' }, { username: 'Mobile user', fingerprintToken, status: 'approved' }]) {
+    for (const payload of [{ student: 'Mobile user' }, { student: 'Mobile user', fingerprintToken: 'short' }, { student: 'Mobile user', fingerprintToken, status: 'approved' }]) {
       assert.equal((await server.inject({ method: 'POST', url: `${path}/register`, payload })).statusCode, 400);
     }
-    assert.equal((await server.inject({ method: 'POST', url: `${path}/register`, headers: { origin: 'https://other.example' }, payload: { username: 'Mobile user', fingerprintToken } })).statusCode, 403);
-    assert.equal((await server.inject({ method: 'POST', url: `${path}/status`, payload: { username: 'Mobile user', fingerprintToken } })).statusCode, 404);
-    const registered = await server.inject({ method: 'POST', url: `${path}/register`, payload: { username: 'Mobile user', fingerprintToken } });
+    for (const action of ['register', 'status']) {
+      for (const payload of [
+        { username: 'Mobile user', fingerprintToken },
+        { student: 'Mobile user', username: 'Mobile user', fingerprintToken },
+      ]) {
+        assert.equal((await server.inject({ method: 'POST', url: `${path}/${action}`, payload })).statusCode, 400);
+      }
+    }
+    assert.equal((await server.inject({ method: 'POST', url: `${path}/register`, headers: { origin: 'https://other.example' }, payload: { student: 'Mobile user', fingerprintToken } })).statusCode, 403);
+    assert.equal((await server.inject({ method: 'POST', url: `${path}/status`, payload: { student: 'Mobile user', fingerprintToken } })).statusCode, 404);
+    const registered = await server.inject({ method: 'POST', url: `${path}/register`, payload: { student: 'Mobile user', fingerprintToken } });
     assert.equal(registered.statusCode, 202);
-    assert.equal((await server.inject({ method: 'POST', url: `${path}/status`, payload: { username: 'Another user', fingerprintToken } })).statusCode, 404);
+    assert.equal((await server.inject({ method: 'POST', url: `${path}/status`, payload: { student: 'Another user', fingerprintToken } })).statusCode, 404);
     assert.equal((await server.inject({ url: '/api/portal/integrations/ssacademy/identity', headers: { ...headers, authorization: `Bearer ssa_${randomBytes(32).toString('base64url')}` } })).statusCode, 401);
     let response;
-    for (let index = 0; index < 22; index++) response = await server.inject({ method: 'POST', url: `${path}/register`, payload: { username: 'Mobile user', fingerprintToken } });
+    for (let index = 0; index < 22; index++) response = await server.inject({ method: 'POST', url: `${path}/register`, payload: { student: 'Mobile user', fingerprintToken } });
     assert.equal(response.statusCode, 429);
   } finally { await server.close(); }
 });
@@ -298,17 +315,17 @@ test('ssAcademy fingerprint enrollment requires admin approval and retries canno
   } finally { store.close(); }
 });
 
-test('ssAcademy device approval requires an approved named account and survives restarts', async () => {
+test('ssAcademy device approval preserves existing account ownership and survives restarts', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'ssportal-devices-'));
   const path = join(directory, 'auth.sqlite');
   let store = createAuthStore({ path });
   try {
     const administrator = admin(store);
     const token = randomBytes(32).toString('base64url');
-    const registered = store.registerAcademyDevice('New member', token).device;
-    assert.throws(() => store.updateAcademyDevice(administrator.id, registered.id, 'approved'), { statusCode: 409 });
     const member = register(store, 'New member');
-    assert.throws(() => store.updateAcademyDevice(administrator.id, registered.id, 'approved'), { statusCode: 403 });
+    const registered = store.registerAcademyDevice('New member', token).device;
+    store.updateAcademyDevice(administrator.id, registered.id, 'approved');
+    assert.equal(store.getAcademyDeviceUser(token).id, member.id);
     store.updateUser(administrator.id, member.id, { status: 'approved' });
     store.updateAcademyDevice(administrator.id, registered.id, 'approved');
     store.close();
@@ -323,6 +340,42 @@ test('ssAcademy device approval requires an approved named account and survives 
     store.updateUser(administrator.id, member.id, { status: 'approved' });
     assert.equal(store.getAcademyDeviceUser(token), null);
     assert.equal(store.getAcademyDeviceStatus('New member', token).status, 'revoked');
+  } finally { store.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test('ssAcademy accountless approvals persist with isolated owners and never attach to later accounts', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'ssportal-independent-devices-'));
+  const path = join(directory, 'auth.sqlite');
+  let clock = 0;
+  let store = createAuthStore({ path, now: () => clock });
+  try {
+    const administrator = admin(store);
+    const token = randomBytes(32).toString('hex');
+    const otherToken = randomBytes(32).toString('hex');
+    const device = store.registerAcademyDevice('Student without account', token).device;
+    const other = store.registerAcademyDevice('Student without account', otherToken).device;
+    assert.equal(store.findUserByName('Student without account'), null);
+    const approved = store.updateAcademyDevice(administrator.id, device.id, 'approved');
+    store.updateAcademyDevice(administrator.id, other.id, 'approved');
+    const owner = store.getAcademyDeviceUser(token);
+    assert.deepEqual(owner, { id: `ssacademy-device:${device.id}`, name: 'Student without account', role: 'user' });
+    assert.notEqual(store.getAcademyDeviceUser(otherToken).id, owner.id);
+    store.close();
+    store = createAuthStore({ path, now: () => clock });
+    assert.deepEqual(store.getAcademyDeviceUser(token), owner);
+    const member = register(store, 'Student without account');
+    store.updateUser(administrator.id, member.id, { status: 'approved' });
+    assert.deepEqual(store.getAcademyDeviceUser(token), owner);
+    assert.equal(store.listAcademyDevices(administrator.id).devices.find((entry) => entry.id === device.id).userId, null);
+    store.deleteUser(administrator.id, member.id);
+    assert.deepEqual(store.getAcademyDeviceUser(token), owner);
+    clock = approved.expiresAt;
+    assert.equal(store.getAcademyDeviceUser(token), null);
+    store.updateAcademyDevice(administrator.id, device.id, 'approved');
+    assert.deepEqual(store.getAcademyDeviceUser(token), owner);
+    store.updateAcademyDevice(administrator.id, device.id, 'revoked');
+    assert.equal(store.getAcademyDeviceUser(token), null);
+    assert.equal(store.registerAcademyDevice('Student without account', token).device.status, 'revoked');
   } finally { store.close(); await rm(directory, { recursive: true, force: true }); }
 });
 

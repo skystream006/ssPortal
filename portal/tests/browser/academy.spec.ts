@@ -38,6 +38,74 @@ async function importThroughViewer(page: Page, source: string) {
   await expect(dialog).not.toBeVisible();
 }
 
+test('ssAcademy appearance matches every portal palette and synchronizes modes and preferences', async ({ page, context, portal }) => {
+  await page.emulateMedia({ colorScheme: 'light' });
+  await page.evaluate(() => localStorage.setItem('ssportal.preferences', JSON.stringify({
+    theme: 'green', mode: 'system', newTab: false, autoRefresh: false, view: 'list',
+  })));
+  await page.goto('/ssacademy/');
+  await page.getByRole('button', { name: 'Appearance settings', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Appearance', exact: true });
+  await expect(dialog.getByRole('button', { name: 'System', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  const portalPage = await context.newPage();
+  await portalPage.goto(portal.origin);
+  const palette = (target: Page) => target.evaluate(() => {
+    const style = getComputedStyle(document.documentElement);
+    return ['paper', 'surface', 'raised', 'ink', 'muted', 'line', 'accent', 'field', 'on-accent', 'danger', 'warning', 'positive', 'shadow']
+      .map((name) => style.getPropertyValue(`--${name}`).trim());
+  });
+  for (const mode of ['Light', 'Dark']) {
+    await dialog.getByRole('button', { name: mode, exact: true }).click();
+    for (const name of ['Midnight blue', 'Maize and blue', 'Royal purple', 'Gold', 'Green', 'Pink', 'Black']) {
+      const button = dialog.getByRole('button', { name: `${name} theme`, exact: true });
+      await button.click();
+      await expect(button).toHaveAttribute('aria-pressed', 'true');
+      const theme = await button.getAttribute('data-theme');
+      await expect(portalPage.locator('html')).toHaveAttribute('data-theme', theme!);
+      await expect(portalPage.locator('html')).toHaveAttribute('data-theme-mode', mode.toLowerCase());
+      expect(await palette(page)).toEqual(await palette(portalPage));
+    }
+  }
+  await dialog.getByRole('button', { name: 'System', exact: true }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-theme-mode', 'light');
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await expect(page.locator('html')).toHaveAttribute('data-theme-mode', 'dark');
+  await dialog.getByRole('button', { name: 'Done', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Appearance settings', exact: true })).toBeFocused();
+  await page.reload();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'black');
+  await expect(page.locator('html')).toHaveAttribute('data-theme-mode', 'dark');
+  await page.getByRole('button', { name: 'Appearance settings', exact: true }).click();
+  await dialog.getByRole('button', { name: 'Reset appearance', exact: true }).click();
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('ssportal.preferences')!))).toEqual({
+    theme: 'green', mode: 'system', newTab: false, autoRefresh: false, view: 'list',
+  });
+  await portalPage.getByRole('button', { name: 'Appearance settings', exact: true }).click();
+  await portalPage.getByRole('button', { name: 'Pink theme', exact: true }).click();
+  await portalPage.getByRole('button', { name: 'Light', exact: true }).click();
+  await expect(dialog.getByRole('button', { name: 'Pink theme', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(dialog.getByRole('button', { name: 'Light', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('html')).toHaveAttribute('data-theme-mode', 'light');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await portalPage.close();
+});
+
+test('ssAcademy reports unavailable preference storage while applying the chosen appearance', async ({ page }) => {
+  await page.goto('/ssacademy/');
+  await page.evaluate(() => {
+    Storage.prototype.setItem = () => { throw new DOMException('Storage unavailable', 'QuotaExceededError'); };
+  });
+  await page.getByRole('button', { name: 'Appearance settings', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Appearance', exact: true });
+  await dialog.getByRole('button', { name: 'Royal purple theme', exact: true }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'royal-purple');
+  await expect(dialog.getByRole('alert')).toContainText('could not be saved');
+  await dialog.getByRole('button', { name: 'Dark', exact: true }).click();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'royal-purple');
+  await expect(page.locator('html')).toHaveAttribute('data-theme-mode', 'dark');
+});
+
 test('ssAcademy imports JSON and displays normalized reward and animation records', async ({ page }, testInfo) => {
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
@@ -85,7 +153,7 @@ test('ssAcademy imports JSON and displays normalized reward and animation record
 
 test('ssAcademy fingerprint apps require admin approval, stay upload-only, and can be revoked', async ({ page, request, academy }, testInfo) => {
   const fingerprintToken = randomBytes(32).toString('hex');
-  const enrollment = { username: 'Test administrator', fingerprintToken };
+  const enrollment = { student: 'Test administrator', fingerprintToken };
   const registered = await request.post(`${academy.origin}/ssacademy/api/devices/register`, { data: enrollment });
   expect(registered.status()).toBe(202);
   const device = (await registered.json()).device;
@@ -115,7 +183,7 @@ test('ssAcademy fingerprint apps require admin approval, stay upload-only, and c
   await detail.getByRole('button', { name: 'Delete import', exact: true }).click();
   await page.getByRole('dialog', { name: 'Delete imported data?' }).getByRole('button', { name: 'Delete import', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'No collection exports' })).toBeVisible();
-  await page.getByRole('link', { name: 'Upload tokens', exact: true }).click();
+  await page.getByRole('link', { name: 'Sync Tokens', exact: true }).click();
   await expect(page.locator('#tokens-body')).toContainText('Test administrator');
   await page.screenshot({ path: testInfo.outputPath('academy-tokens.png'), fullPage: true, animations: 'disabled' });
   await page.getByRole('button', { name: `Revoke Test administrator (${device.fingerprint})`, exact: true }).click();
@@ -128,26 +196,24 @@ test('ssAcademy fingerprint apps require admin approval, stay upload-only, and c
   await expect(page.getByRole('heading', { name: 'No app registrations' })).toBeVisible();
 });
 
-test('ssAcademy app approvals filter safely and wait for an approved portal account', async ({ page, request, portal, academy }, testInfo) => {
-  const username = 'New <b>member</b>';
-  for (const name of [username, 'Test administrator']) {
-    const registered = await request.post(`${academy.origin}/ssacademy/api/devices/register`, { data: { username: name, fingerprintToken: randomBytes(32).toString('hex') } });
+test('ssAcademy approves accountless students and keeps their uploads isolated', async ({ page, request, portal, academy }, testInfo) => {
+  const student = 'New <b>member</b>';
+  const fingerprintToken = randomBytes(32).toString('hex');
+  for (const name of [student, 'Test administrator']) {
+    const registered = await request.post(`${academy.origin}/ssacademy/api/devices/register`, { data: { student: name, fingerprintToken: name === student ? fingerprintToken : randomBytes(32).toString('hex') } });
     expect(registered.status()).toBe(202);
   }
   await page.goto('/ssacademy/#tokens');
   await expect(page.locator('#tokens-body tr')).toHaveCount(2);
-  const pending = page.locator('#tokens-body tr').filter({ hasText: username });
-  await expect(pending).toContainText('No portal account');
-  await expect(pending.locator('[data-approve]')).toBeDisabled();
+  const pending = page.locator('#tokens-body tr').filter({ hasText: student });
+  await expect(pending).toContainText('Portal account not required');
+  await expect(pending.locator('[data-approve]')).toBeEnabled();
   await expect(page.locator('#tokens-body b')).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath('academy-app-accounts.png'), fullPage: true, animations: 'disabled' });
-  await page.getByRole('searchbox', { name: 'Search app usernames' }).fill('New');
+  await page.getByRole('searchbox', { name: 'Search app students' }).fill('New');
   await expect(page.locator('#tokens-body tr')).toHaveCount(1);
-  const administrator = portal.store.findUserByName('Test administrator')!;
-  createMemberSession(portal.store, administrator.id, username);
-  await page.getByRole('button', { name: 'Refresh app registrations' }).click();
-  await expect(pending.locator('[data-approve]')).toBeEnabled();
+  expect(portal.store.findUserByName(student)).toBeNull();
   await pending.locator('[data-approve]').click();
   const dialog = page.getByRole('dialog', { name: 'Approve app?', exact: true });
   await expect(dialog.locator('b')).toHaveCount(0);
@@ -155,13 +221,34 @@ test('ssAcademy app approvals filter safely and wait for an approved portal acco
   await expect(page.locator('#tokens-body [data-status]')).toHaveText('approved');
   await page.getByLabel('Filter app status').selectOption('pending');
   await expect(page.getByRole('heading', { name: 'No matching apps' })).toBeVisible();
-  await page.getByRole('searchbox', { name: 'Search app usernames' }).fill('');
+  await page.getByRole('searchbox', { name: 'Search app students' }).fill('');
   await expect(page.locator('#tokens-body tr')).toHaveCount(1);
   await expect(page.locator('#tokens-body')).toContainText('Test administrator');
   await page.getByLabel('Filter app status').selectOption('approved');
-  await expect(page.locator('#tokens-body')).toContainText(username);
+  await expect(page.locator('#tokens-body')).toContainText(student);
   await page.getByLabel('Filter app status').selectOption('');
   await expect(page.locator('#tokens-body tr')).toHaveCount(2);
+  const headers = { authorization: `Bearer ${fingerprintToken}` };
+  const upload = await request.post(`${academy.origin}/ssacademy/api/imports`, { headers, data: { source: 'Independent student tablet', data: exportData } });
+  expect(upload.status()).toBe(201);
+  const id = (await upload.json()).import.id;
+  const downloaded = await request.get(`${academy.origin}/ssacademy/api/imports/${id}`, { headers });
+  expect(downloaded.status()).toBe(200);
+  expect((await downloaded.json()).import.ownerName).toBe(student);
+  expect((await request.get(`${academy.origin}/ssacademy/api/imports`, { headers })).status()).toBe(403);
+  const otherToken = randomBytes(32).toString('hex');
+  const otherRegistration = await request.post(`${academy.origin}/ssacademy/api/devices/register`, { data: { student, fingerprintToken: otherToken } });
+  const otherId = (await otherRegistration.json()).device.id;
+  expect((await page.request.patch(`${academy.origin}/ssacademy/api/tokens/${otherId}`, { headers: { origin: portal.origin }, data: { status: 'approved' } })).status()).toBe(200);
+  expect((await request.get(`${academy.origin}/ssacademy/api/imports/${id}`, { headers: { authorization: `Bearer ${otherToken}` } })).status()).toBe(404);
+  await page.getByRole('link', { name: 'Collections', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'No collection exports' })).toBeVisible();
+  await page.getByRole('checkbox', { name: 'All users', exact: true }).check();
+  await expect(page.locator('#imports-body')).toContainText(student);
+  await expect(page.locator('#imports-body b')).toHaveCount(0);
+  await page.getByRole('button', { name: 'View Independent student tablet', exact: true }).first().click();
+  await expect(page.getByRole('dialog', { name: 'Independent student tablet', exact: true })).toBeVisible();
+  expect(portal.store.findUserByName(student)).toBeNull();
 });
 
 test('ssAcademy rejects invalid imports and reads local files as JSON data, never multipart uploads', async ({ page }) => {
@@ -237,7 +324,7 @@ test('ssAcademy members cannot edit values or view other owners', async ({ page,
   await context.addCookies([{ name: 'ssportal_session', value: member.token, url: portal.origin, httpOnly: true, sameSite: 'Strict' }]);
   await page.goto('/ssacademy/');
   await expect(page.getByRole('checkbox', { name: 'All users', exact: true })).toHaveCount(0);
-  await expect(page.getByRole('link', { name: 'Upload tokens', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('link', { name: 'Sync Tokens', exact: true })).toHaveCount(0);
   expect((await page.request.get(`${academy.origin}/ssacademy/api/tokens`)).status()).toBe(403);
   await page.getByRole('button', { name: 'View Member tablet', exact: true }).first().click();
   await expect(page.getByRole('button', { name: 'Edit values', exact: true })).toHaveCount(0);

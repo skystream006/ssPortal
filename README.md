@@ -121,7 +121,7 @@ The HTTPS Compose override sets `PASSKEY_ORIGIN` to `https://<PASSKEY_RP_ID>`. W
 
 Open ssAcademy from Applications to import and view collection data exported by the Android app. Parsed balances and animation identifiers are stored as database rows, not export files. Members see their own imports; administrators can choose **All users** and **Edit values** to adjust reward balances and animation IDs with revision checks.
 
-For mobile uploads, the app registers its `username` and private per-installation `fingerprintToken` at `POST /ssacademy/api/devices/register`. An administrator approves the request in **ssAcademy > Upload tokens > App approvals**. The same token then authorizes uploads and `GET /ssacademy/api/imports/:id` downloads of owned imports for 90 days, without a browser session and with explicit revocation/reapproval. Tokens are hashed; no biometric data is used. The server no longer generates upload tokens, and legacy generated tokens must be replaced through registration and approval. Existing accounts and imported data are preserved.
+For mobile uploads, the app registers its `student` name and private per-installation `fingerprintToken` at `POST /ssacademy/api/devices/register`. The student does not need a portal account. An administrator approves the request in **ssAcademy > Sync Tokens > App approvals**. The same token then authorizes uploads and `GET /ssacademy/api/imports/:id` downloads of owned imports for 90 days, without a browser session and with explicit revocation/reapproval. Accountless registrations have isolated import ownership; administrators can view their imports with **All users**. Tokens are hashed; no biometric data is used. The server no longer generates upload tokens, and legacy generated tokens must be replaced through registration and approval. Existing accounts and imported data are preserved.
 
 The verified upstream export is `ssAcademy-collections` version 1, which contains rewards and collected animations, not practice history, reading progress, or PINs. Administration changes server records only; they are not pushed to Android devices. See [portal_apps/ssAcademy/README.md](portal_apps/ssAcademy/README.md) for the API request format, permissions, validation limits, and backup instructions.
 
@@ -131,7 +131,7 @@ The portal follows the theme names and palettes from ssMusic_Server:
 
 Midnight blue, Maize and blue, Royal purple, Gold, Green, Pink, and Black.
 
-Appearance settings include Light, Dark, and System modes, app launch behavior, and automatic status refresh. Appearance is browser-local; favorites are scoped to each portal account in browser storage and synchronize between portal tabs. App launches are not recorded. Fonts and app icons are served locally. These preferences style the **portal**, not the independent Grocy/webtrees interfaces; those retain their native appearance settings.
+Appearance settings include Light, Dark, and System modes, app launch behavior, and automatic status refresh. Appearance is browser-local; favorites are scoped to each portal account in browser storage and synchronize between portal tabs. App launches are not recorded. Fonts and app icons are served locally. The **portal and ssAcademy viewer** share color themes and modes; either app's Appearance settings updates both. The independent Grocy/webtrees interfaces retain their native appearance settings.
 
 ## Development
 

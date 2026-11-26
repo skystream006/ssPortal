@@ -47,9 +47,9 @@ export async function buildApp({
   };
 
   const deviceBody = {
-    type: 'object', additionalProperties: false, required: ['username', 'fingerprintToken'],
+    type: 'object', additionalProperties: false, required: ['student', 'fingerprintToken'],
     properties: {
-      username: { type: 'string', minLength: 2, maxLength: 64 },
+      student: { type: 'string', minLength: 2, maxLength: 64 },
       fingerprintToken: { type: 'string', minLength: 32, maxLength: 256, pattern: '^[A-Za-z0-9_-]+$' },
     },
   };

@@ -15,7 +15,7 @@ const portal = {
   },
   async tokens() { return { devices: [], total: 0, page: 1, pageSize: 50 }; },
   async deviceRequest(action, headers, body) {
-    return { status: action === 'register' ? 202 : 200, body: { device: { id: 'pending-app', username: body.username, status: 'pending', fingerprint: 'safe-display-id', expiresAt: null } } };
+    return { status: action === 'register' ? 202 : 200, body: { device: { id: 'pending-app', student: body.student, status: 'pending', fingerprint: 'safe-display-id', expiresAt: null } } };
   },
 };
 
@@ -177,18 +177,30 @@ test('the viewer requires a session and serves only its intended public assets',
   } finally { await server.close(); }
 });
 
-test('mobile enrollment accepts only JSON username/fingerprint pairs without exposing collection data', async () => {
+test('mobile enrollment accepts only JSON student/fingerprint pairs without exposing collection data', async () => {
   const server = await buildApp({ store: createStore(), portal, staticDir: false });
   try {
-    const payload = { username: 'Mobile user', fingerprintToken: 'a'.repeat(64) };
+    const payload = { student: 'Mobile user', fingerprintToken: 'a'.repeat(64) };
     const registered = await server.inject({ method: 'POST', url: '/ssacademy/api/devices/register', payload });
     assert.equal(registered.statusCode, 202);
     assert.equal(registered.json().device.status, 'pending');
+    assert.equal(registered.json().device.student, payload.student);
+    assert.equal('username' in registered.json().device, false);
     assert.equal(registered.headers['cache-control'], 'no-store');
     assert.equal(registered.body.includes(payload.fingerprintToken), false);
-    assert.equal((await server.inject({ method: 'POST', url: '/ssacademy/api/devices/status', payload })).statusCode, 200);
+    const status = await server.inject({ method: 'POST', url: '/ssacademy/api/devices/status', payload });
+    assert.equal(status.statusCode, 200);
+    assert.equal(status.json().device.student, payload.student);
+    for (const action of ['register', 'status']) {
+      for (const legacy of [
+        { username: payload.student, fingerprintToken: payload.fingerprintToken },
+        { ...payload, username: payload.student },
+      ]) {
+        assert.equal((await server.inject({ method: 'POST', url: `/ssacademy/api/devices/${action}`, payload: legacy })).statusCode, 400);
+      }
+    }
     assert.equal((await server.inject({ method: 'POST', url: '/ssacademy/api/devices/register', payload: { ...payload, status: 'approved' } })).statusCode, 400);
-    assert.equal((await server.inject({ method: 'POST', url: '/ssacademy/api/devices/register', payload: { username: 'Mobile user' } })).statusCode, 400);
+    assert.equal((await server.inject({ method: 'POST', url: '/ssacademy/api/devices/register', payload: { student: 'Mobile user' } })).statusCode, 400);
     assert.equal((await server.inject({ method: 'POST', url: '/ssacademy/api/devices/register', payload: { ...payload, fingerprintToken: 'short' } })).statusCode, 400);
     assert.equal((await server.inject('/ssacademy/api/imports')).statusCode, 401);
     assert.equal((await server.inject({ url: '/ssacademy/api/tokens', headers: sessionHeaders })).statusCode, 403);
@@ -198,7 +210,7 @@ test('mobile enrollment accepts only JSON username/fingerprint pairs without exp
 });
 
 test('mobile enrollment forwards only the request body and validated browser-origin context', async () => {
-  const payload = { username: 'Mobile user', fingerprintToken: 'b'.repeat(64) };
+  const payload = { student: 'Mobile user', fingerprintToken: 'b'.repeat(64) };
   const client = createPortalClient({ origin: 'http://portal:3000', fetchImpl: async (url, options) => {
     assert.equal(url.href, 'http://portal:3000/api/portal/integrations/ssacademy/devices/register');
     assert.equal(options.method, 'POST');

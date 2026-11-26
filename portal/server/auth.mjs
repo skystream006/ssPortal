@@ -89,21 +89,21 @@ export async function registerAuth(server, { store, config, apps, webauthn = sim
   });
   const objectBody = (properties = {}, required = []) => ({ type: 'object', additionalProperties: false, properties, required });
 
-  const deviceBody = objectBody({ username: nameSchema, fingerprintToken: { type: 'string', minLength: 32, maxLength: 256, pattern: '^[A-Za-z0-9_-]+$' } }, ['username', 'fingerprintToken']);
+  const deviceBody = objectBody({ student: nameSchema, fingerprintToken: { type: 'string', minLength: 32, maxLength: 256, pattern: '^[A-Za-z0-9_-]+$' } }, ['student', 'fingerprintToken']);
   const deviceRequestOptions = {
     bodyLimit: 1024, schema: { body: deviceBody },
     config: { rateLimit: { max: 20, timeWindow: '1 minute' } },
     preHandler: async (request) => { if (request.headers.origin !== undefined) await requireOrigin(request); },
   };
-  const deviceStatus = ({ id, username, fingerprint, status, expiresAt }) => ({ id, username, fingerprint, status, expiresAt });
+  const deviceStatus = ({ id, student, fingerprint, status, expiresAt }) => ({ id, student, fingerprint, status, expiresAt });
 
   server.post('/api/portal/integrations/ssacademy/devices/register', deviceRequestOptions, async (request, reply) => {
-    const result = store.registerAcademyDevice(request.body.username, request.body.fingerprintToken);
+    const result = store.registerAcademyDevice(request.body.student, request.body.fingerprintToken);
     return reply.code(result.created ? 202 : 200).send({ device: deviceStatus(result.device) });
   });
 
   server.post('/api/portal/integrations/ssacademy/devices/status', deviceRequestOptions, async (request) => ({
-    device: deviceStatus(store.getAcademyDeviceStatus(request.body.username, request.body.fingerprintToken)),
+    device: deviceStatus(store.getAcademyDeviceStatus(request.body.student, request.body.fingerprintToken)),
   }));
 
   server.get('/api/portal/integrations/ssacademy/identity', { config: { rateLimit: { max: 300, timeWindow: '1 minute' } } }, async (request) => {

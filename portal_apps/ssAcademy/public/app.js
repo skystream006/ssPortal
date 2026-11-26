@@ -45,6 +45,11 @@ function setBusy(dialog, busy) {
   for (const control of dialog.querySelectorAll('button, input, textarea, select')) control.disabled = busy;
 }
 
+byId('open-appearance').addEventListener('click', () => {
+  openDialog(byId('appearance-dialog'));
+  window.dispatchEvent(new Event('academy-appearance-open'));
+});
+
 for (const dialog of document.querySelectorAll('dialog')) {
   dialog.addEventListener('cancel', (event) => {
     if (dialog.dataset.busy === 'true') event.preventDefault();
@@ -234,9 +239,9 @@ async function loadTokens() {
     byId('tokens-body').replaceChildren();
     for (const device of result.devices) {
       const row = byId('token-row').content.firstElementChild.cloneNode(true);
-      row.querySelector('[data-username]').textContent = device.username;
+      row.querySelector('[data-student]').textContent = device.student;
       row.querySelector('[data-fingerprint]').textContent = device.fingerprint;
-      row.querySelector('[data-account]').textContent = device.accountStatus === 'approved' ? device.accountName : device.accountStatus ? `Account ${device.accountStatus}` : 'No portal account';
+      row.querySelector('[data-account]').textContent = device.userId ? `Portal account: ${device.accountName}` : 'Portal account not required';
       row.querySelector('[data-status]').textContent = device.status;
       row.querySelector('[data-status]').classList.add(`device-${device.status}`);
       row.querySelector('[data-created]').textContent = formatDate(device.createdAt);
@@ -244,25 +249,24 @@ async function loadTokens() {
       row.querySelector('[data-used]').textContent = device.lastUsedAt ? formatDate(device.lastUsedAt) : 'Never';
       const approve = row.querySelector('[data-approve]');
       approve.hidden = device.status === 'approved';
-      approve.disabled = device.accountStatus !== 'approved';
-      approve.setAttribute('aria-label', `Approve ${device.username} (${device.fingerprint})`);
-      approve.title = approve.disabled ? 'The portal account must be approved first' : 'Approve app';
-      approve.addEventListener('click', () => confirm('Approve app?', `${device.username} / ${device.fingerprint}`, 'Approve app', async () => {
+      approve.setAttribute('aria-label', `Approve ${device.student} (${device.fingerprint})`);
+      approve.title = 'Approve app';
+      approve.addEventListener('click', () => confirm('Approve app?', `${device.student} / ${device.fingerprint}`, 'Approve app', async () => {
         await api(`/tokens/${encodeURIComponent(device.id)}`, { method: 'PATCH', body: JSON.stringify({ status: 'approved' }) });
         await loadTokens(); notice('App approved for uploads.');
       }, false));
       const revoke = row.querySelector('[data-revoke]');
       revoke.hidden = device.status === 'revoked';
-      revoke.title = `Revoke ${device.username} (${device.fingerprint})`;
+      revoke.title = `Revoke ${device.student} (${device.fingerprint})`;
       revoke.setAttribute('aria-label', revoke.title);
-      revoke.addEventListener('click', () => confirm('Revoke app access?', `${device.username} / ${device.fingerprint}`, 'Revoke app', async () => {
+      revoke.addEventListener('click', () => confirm('Revoke app access?', `${device.student} / ${device.fingerprint}`, 'Revoke app', async () => {
         await api(`/tokens/${encodeURIComponent(device.id)}`, { method: 'PATCH', body: JSON.stringify({ status: 'revoked' }) });
         await loadTokens(); notice('App upload access revoked.');
       }));
       const remove = row.querySelector('[data-delete]');
-      remove.title = `Delete ${device.username} (${device.fingerprint})`;
+      remove.title = `Delete ${device.student} (${device.fingerprint})`;
       remove.setAttribute('aria-label', remove.title);
-      remove.addEventListener('click', () => confirm('Delete app registration?', `${device.username} / ${device.fingerprint}`, 'Delete registration', async () => {
+      remove.addEventListener('click', () => confirm('Delete app registration?', `${device.student} / ${device.fingerprint}`, 'Delete registration', async () => {
         await api(`/tokens/${encodeURIComponent(device.id)}`, { method: 'DELETE' });
         await loadTokens(); notice('App registration deleted.');
       }));

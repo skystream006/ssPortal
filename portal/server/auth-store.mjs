@@ -318,11 +318,10 @@ export function createAuthStore({ path = ':memory:', now = Date.now, sessionDays
   }
 
   function academyDevice(record) {
-    const matchedUser = record.user_id ?? database.prepare('SELECT id FROM users WHERE name_key = ?').get(record.username_key)?.id;
-    const user = matchedUser ? getUser(matchedUser) : null;
+    const user = record.user_id ? getUser(record.user_id) : null;
     const status = record.status === 'approved' && record.expires_at <= now() ? 'expired' : record.status;
     return {
-      id: record.id, username: record.username, userId: record.user_id,
+      id: record.id, student: record.username, userId: record.user_id,
       accountName: user?.name ?? null, accountStatus: user?.status ?? null,
       fingerprint: record.token_hash.slice(0, 16), status,
       createdAt: record.created_at, updatedAt: record.updated_at,
@@ -331,14 +330,14 @@ export function createAuthStore({ path = ':memory:', now = Date.now, sessionDays
     };
   }
 
-  function registerAcademyDevice(username, fingerprintToken) {
-    const name = normalizeName(username);
+  function registerAcademyDevice(student, fingerprintToken) {
+    const name = normalizeName(student);
     const nameKey = name.toLowerCase();
     const tokenHash = academyFingerprintHash(fingerprintToken);
     return transaction(() => {
       const existing = database.prepare('SELECT * FROM academy_devices WHERE token_hash = ?').get(tokenHash);
       if (existing) {
-        if (existing.username_key !== nameKey) throw authError(409, 'This app token is already registered to a different username.');
+        if (existing.username_key !== nameKey) throw authError(409, 'This app token is already registered to a different student.');
         return { created: false, device: academyDevice(existing) };
       }
       if (database.prepare('SELECT count(*) AS count FROM academy_devices').get().count >= 2000
@@ -354,8 +353,8 @@ export function createAuthStore({ path = ':memory:', now = Date.now, sessionDays
     });
   }
 
-  function getAcademyDeviceStatus(username, fingerprintToken) {
-    const nameKey = normalizeName(username).toLowerCase();
+  function getAcademyDeviceStatus(student, fingerprintToken) {
+    const nameKey = normalizeName(student).toLowerCase();
     const tokenHash = academyFingerprintHash(fingerprintToken);
     const record = database.prepare('SELECT * FROM academy_devices WHERE token_hash = ? AND username_key = ?').get(tokenHash, nameKey);
     if (!record) throw authError(404, 'App registration not found.');
@@ -387,13 +386,10 @@ export function createAuthStore({ path = ':memory:', now = Date.now, sessionDays
       const record = database.prepare('SELECT * FROM academy_devices WHERE id = ?').get(id);
       if (!record) throw authError(404, 'App registration not found.');
       if (status === 'approved') {
-        const userId = record.user_id ?? database.prepare('SELECT id FROM users WHERE name_key = ?').get(record.username_key)?.id;
-        if (!userId) throw authError(409, 'Create and approve the named portal account before approving this app.');
-        requireApproved(userId);
         if (record.status === 'approved' && record.expires_at > now()) return academyDevice(record);
         const timestamp = now();
-        database.prepare(`UPDATE academy_devices SET user_id = ?, status = 'approved', updated_at = ?, approved_at = ?, approved_by = ?, expires_at = ? WHERE id = ?`)
-          .run(userId, timestamp, timestamp, actorId, timestamp + 90 * 86_400_000, id);
+        database.prepare(`UPDATE academy_devices SET status = 'approved', updated_at = ?, approved_at = ?, approved_by = ?, expires_at = ? WHERE id = ?`)
+          .run(timestamp, timestamp, actorId, timestamp + 90 * 86_400_000, id);
       } else {
         database.prepare("UPDATE academy_devices SET status = 'revoked', updated_at = ? WHERE id = ?").run(now(), id);
       }
@@ -404,12 +400,12 @@ export function createAuthStore({ path = ':memory:', now = Date.now, sessionDays
   function getAcademyDeviceUser(fingerprintToken) {
     let tokenHash;
     try { tokenHash = academyFingerprintHash(fingerprintToken); } catch { return null; }
-    const record = database.prepare("SELECT id, user_id FROM academy_devices WHERE token_hash = ? AND status = 'approved' AND expires_at > ?")
+    const record = database.prepare("SELECT id, user_id, username FROM academy_devices WHERE token_hash = ? AND status = 'approved' AND expires_at > ?")
       .get(tokenHash, now());
-    const user = record?.user_id ? getUser(record.user_id) : null;
-    if (user?.status !== 'approved') return null;
+    if (!record) return null;
+    const user = record.user_id ? getUser(record.user_id) : null;
     database.prepare('UPDATE academy_devices SET last_used_at = ? WHERE id = ?').run(now(), record.id);
-    return user;
+    return { id: record.user_id ?? `ssacademy-device:${record.id}`, name: user?.name ?? record.username, role: 'user' };
   }
 
   function deleteAcademyDevice(actorId, id) {
