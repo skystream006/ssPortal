@@ -29,15 +29,19 @@ Edits are transactional and revision-checked. Stale forms receive HTTP 409 inste
 
 Re-uploading the same original data with the same source label and owner returns the existing record and preserves administrative corrections. A different source export creates another snapshot. Edits affect this server only; there is no automatic sync back to Android.
 
-## App Approval and Fingerprint Tokens
+## App Approval and Sync Tokens
 
-The mobile app supplies a `student` and a persistent `fingerprintToken`. The server does not generate upload credentials. An administrator opens **ssAcademy > Sync Tokens** to view the **App approvals** queue, filter registrations, and approve, revoke, or delete an app. Members cannot open or administer this page.
+The mobile app supplies a `student` and a persistent `fingerprintToken` to identify its registration. Neither value authenticates syncs. An administrator opens **ssAcademy > Sync Tokens** to view the **App approvals** queue, filter registrations, and approve, revoke, or delete an app. Members cannot open or administer this page.
 
 The student is a display name; a portal account is **not required** to register or approve an app token. Registration does not create a portal account. Only a signed-in portal administrator can approve tokens. Compare the requesting app's fingerprint ID with the queue before granting access. The public fingerprint ID is the first 16 lowercase hexadecimal characters of SHA-256 over the exact UTF-8 token string; it is not the credential.
 
-`fingerprintToken` must be a **private, randomly generated per-installation secret**, persisted securely on the device and reused for retries, uploads, and downloads. Generate at least 32 random bytes and encode them as hexadecimal or unpadded base64url. The API accepts 32-256 characters from `A-Z`, `a-z`, `0-9`, `_`, and `-`. Do not use a hardware ID, a publicly readable device fingerprint, a password, or biometric data. Approval is not hardware attestation: anyone possessing the secret can use its upload and owned-import download permissions.
+`fingerprintToken` is a stable per-installation **identifier**, reused with the student name for registration retries and status checks. It must remain **private**: possession of the student/identifier pair authorizes the one-time delivery of a new bearer secret. Generate at least 32 random bytes and encode them as hexadecimal or unpadded base64url. The API accepts 32-256 characters from `A-Z`, `a-z`, `0-9`, `_`, and `-`. Do not use a password, public hardware ID, or biometric data. An identifier already registered to another student cannot be reused.
 
-Only SHA-256 token hashes are stored. Tokens are never returned by the API or displayed in the admin page. Approval lasts 90 days; an administrator can explicitly approve an expired or revoked registration again. There are at most 20 registrations per normalized student and 2000 total, including pending, expired, and revoked entries. Administrators can delete obsolete entries to free capacity.
+Approval prepares a separate 256-bit bearer secret, encoded as 64 hexadecimal characters, for `Authorization: Bearer <bearerToken>`. The device receives it **once**, in its first successful `POST /ssacademy/api/devices/status` response after approval. The app must save it securely before making further status checks and use it for subsequent uploads/downloads. The administrator never sees the secret; no manual transfer is required.
+
+Only a SHA-256 hash is kept for bearer authentication. Until delivery, a random nonce and a separate private server key allow the secret to be derived using HMAC-SHA-256. Delivery atomically removes the nonce, preventing later retrieval, including after a restart. Registration retries, approval responses, and administrative listings never contain the bearer secret.
+
+Approval lasts 90 days. **Generate bearer token** on an approved registration prepares a fresh secret for one-time device delivery, immediately invalidates its previous secret, and starts a new 90-day period without changing import ownership. A lost secret or a lost delivery response cannot be recovered; generate another. The device must not run concurrent status polls during provisioning. Revocation and deletion block syncs and cancel pending delivery. There are at most 20 registrations per normalized student and 2000 total, including pending, approved, expired, and revoked entries.
 
 Approved tokens can upload ssAcademy data and download an owned import by ID. They cannot list collections, browse the viewer, edit, delete, manage tokens/users, or access other portal apps. Downloads remain owner-scoped even for tokens linked to administrators.
 
@@ -54,11 +58,11 @@ Protected API requests validate their session or token against the portal accoun
 ```json
 {
   "student": "Learning student",
-  "fingerprintToken": "<private per-installation secret>"
+  "fingerprintToken": "<stable per-installation identifier>"
 }
 ```
 
-Replace the placeholder with the actual secret in the request body, never a URL/query parameter. Student names use portal normalization (case-insensitive matching, NFKC, trimmed and collapsed whitespace; 2-64 characters). The mobile app should retain the original student/token pair for registration retries and status checks.
+Replace the placeholder with the actual private identifier in the request body, never a URL/query parameter. Student names use portal normalization (case-insensitive matching, NFKC, trimmed and collapsed whitespace; 2-64 characters). The mobile app should retain the original student/identifier pair for registration retries and status checks, and store the separately delivered bearer secret securely for syncs.
 
 The `student` field replaces `username` in registration/status requests and device responses, including the app approval listing and updates. Clients must send `student`; legacy `username` fields are rejected with HTTP 400. Existing registrations, approvals, and tokens are preserved.
 
@@ -76,13 +80,32 @@ New registrations return **202** with `pending` status. Repeating the same pair 
 }
 ```
 
-`POST /ssacademy/api/devices/status` accepts the same JSON pair and returns **200** with the same response shape. Status is `pending`, `approved`, `revoked`, or `expired`; `expiresAt` is null before approval and otherwise Unix milliseconds. An absent pair returns **404**, including after an administrator deletes the registration. Registering after deletion creates a new pending request, not approved access.
+`POST /ssacademy/api/devices/status` accepts the same JSON pair and returns **200**. Status is `pending`, `approved`, `revoked`, or `expired`; `expiresAt` is null before approval and otherwise Unix milliseconds. An absent pair returns **404**, including after an administrator deletes the registration. Registering after deletion creates a new pending request, not approved access.
+
+The first successful status check after approval/rotation includes the new secret as a top-level `bearerToken`:
+
+```json
+{
+  "device": {
+    "id": "server-generated-uuid",
+    "student": "Learning student",
+    "fingerprint": "0123456789abcdef",
+    "status": "approved",
+    "expiresAt": 1800000000000
+  },
+  "bearerToken": "<new 64-character secret>"
+}
+```
+
+Subsequent status responses omit `bearerToken`. Missing, expired, revoked, or already-delivered registrations cannot retrieve it. Responses use `Cache-Control: no-store`. The app should retain its saved bearer token when a later response omits the field.
 
 Each public endpoint is limited to 10 requests per minute per client and a 1 KiB JSON body. Poll status with backoff, respect HTTP 429, and stop uploading when access is rejected. Native requests normally omit `Origin`; any supplied `Origin` must match the portal exactly. Registration and status do not accept cookies as substitutes for the student/token pair, and never reveal another user's account details.
 
-### Existing Generated Tokens
+### Existing Tokens
 
-Previously generated upload tokens no longer authenticate, and the token-creation endpoint is removed. Existing accounts, passkeys, imports, and edits are preserved. Legacy token rows may remain in the identity database but are not consulted. Existing upload clients must switch to mobile-provided fingerprint tokens, register, and receive administrator approval; no legacy token is automatically approved or migrated.
+Existing fingerprint-based registrations, approvals, accounts, passkeys, imports, and edits are preserved, but **fingerprintToken no longer authenticates uploads or downloads**. For each previously approved registration, an administrator must choose **Generate bearer token**; the device receives the new secret once through its next status check using the original student/identifier pair.
+
+Older server-generated upload credentials remain retired; legacy token rows are not consulted. No old credential is automatically converted into a bearer secret.
 
 ## Upload API
 
@@ -90,7 +113,7 @@ Previously generated upload tokens no longer authenticate, and the token-creatio
 
 ```http
 Content-Type: application/json
-Authorization: Bearer <same approved fingerprintToken>
+Authorization: Bearer <server-generated bearerToken>
 ```
 
 ```json
@@ -131,7 +154,7 @@ Example JavaScript upload using a parsed `exportedCollections` object:
 const response = await fetch(`${process.env.PORTAL_ORIGIN}/ssacademy/api/imports`, {
   method: 'POST',
   headers: {
-    Authorization: `Bearer ${process.env.SSACADEMY_FINGERPRINT_TOKEN}`,
+    Authorization: `Bearer ${process.env.SSACADEMY_BEARER_TOKEN}`,
     'Content-Type': 'application/json',
   },
   body: JSON.stringify({ source: 'Learning tablet', data: exportedCollections }),
@@ -140,13 +163,13 @@ if (!response.ok) throw new Error(`Upload failed: ${response.status}`);
 const receipt = await response.json();
 ```
 
-Use your actual HTTPS portal origin and trust its certificate. Do not disable TLS verification, publish tokens, or put them in public client code. The example environment variable contains the same device secret used for registration, not the public fingerprint ID. The Android app has not been changed to call this API automatically.
+Use your actual HTTPS portal origin and trust its certificate. Do not disable TLS verification, publish secrets, or put them in public client code. The example environment variable contains the new server-generated bearer secret, not the registration identifier or displayed fingerprint ID. The Android client must handle the optional `bearerToken` in status responses and persist it securely; its source is not changed in this repository.
 
 ## Download API
 
-`GET /ssacademy/api/imports/:id` accepts `Authorization: Bearer <same approved fingerprintToken>` without a browser-session cookie or `Origin` header. Use the import ID returned by an upload receipt. The response is `{ "import": ... }`, with the same current values and edit metadata returned to the browser; the response shape has not changed. Responses use `Cache-Control: no-store`.
+`GET /ssacademy/api/imports/:id` accepts `Authorization: Bearer <server-generated bearerToken>` without a browser-session cookie or `Origin` header. Use the import ID returned by an upload receipt. The response is `{ "import": ... }`, with the same current values and edit metadata returned to the browser; the response shape has not changed. Responses use `Cache-Control: no-store`.
 
-Tokens can download only imports owned by their approved portal account. Missing or other-owner imports return **404**, including for administrator-owned tokens. Missing, unapproved, revoked, or expired credentials return **401**; an unavailable portal account service returns **503**. The endpoint is not anonymous. Browser sessions continue to work with their existing owner/administrator access.
+Tokens can download only imports owned by their app registration or linked portal account. Missing or other-owner imports return **404**, including for administrator-owned tokens. Missing, unapproved, revoked, expired, or replaced credentials return **401**; an unavailable portal account service returns **503**. The endpoint is not anonymous. Browser sessions continue to work with their existing owner/administrator access.
 
 ## Read and Admin API
 
@@ -162,12 +185,14 @@ These endpoints require an approved portal browser-session cookie, except the im
 | `PATCH /ssacademy/api/imports/:id` | Administrator-only value editing |
 | `DELETE /ssacademy/api/imports/:id` | Delete an owned snapshot and its child records |
 | `GET /ssacademy/api/tokens` | Administrator-only app registration metadata, without secrets |
-| `PATCH /ssacademy/api/tokens/:id` | Administrator-only approval or revocation using `{ "status": "approved" }` or `{ "status": "revoked" }` |
+| `PATCH /ssacademy/api/tokens/:id` | Administrator-only approval/rotation or revocation using `{ "status": "approved" }` or `{ "status": "revoked" }` |
 | `DELETE /ssacademy/api/tokens/:id` | Administrator-only registration deletion; immediately removes upload access |
 
 Import listing supports `search`, `source`, `page` (default 1), and `pageSize` (default 25, maximum 100). Default scope is `mine`. Timestamps are Unix milliseconds.
 
 App registration listing returns `{ devices, total, page, pageSize }` and accepts `search` (literal student substring), `status` (empty for all, or `pending`, `approved`, `revoked`, `expired`), `page` (default 1), and `pageSize` (default 50, maximum 100). Approval requires a signed-in portal administrator, not a portal account for the student.
+
+Approval/rotation and revocation return `{ "device": { ... } }` with `Cache-Control: no-store`, never the bearer secret. Administrative device metadata includes `hasBearerToken` so clients can identify registrations that still need credential generation.
 
 An edit sends the complete replacement data and the revision from the detail endpoint:
 
@@ -193,6 +218,8 @@ The `ssacademy` Compose service uses Node.js 24, Fastify, SQLite, and a small br
 
 The `ssportal_ssacademy_data` volume contains `/app/data/academy.sqlite` and WAL/SHM files. Tables are `imports`, `reward_balances`, `collected_animations`, and `import_edits`. Device hashes and approval metadata live separately in `academy_devices` in the portal identity database. Deleting a portal account removes its linked registrations and prevents access, but does not automatically erase its imported records.
 
+The portal creates a private 32-byte delivery key beside its authentication database at `<AUTH_DB_PATH>.sync-key` (Docker: `/app/data/auth.sqlite.sync-key`). Back up and restore it with the auth database. Do not commit or expose this key. A missing or mismatched key fails closed for pending deliveries; restore it, or revoke all pending credentials before generating replacements. Already-delivered bearer authentication uses its stored hash and does not require this key.
+
 ```powershell
 docker compose up -d --build --wait portal ssacademy gateway
 docker compose logs --tail 100 ssacademy
@@ -215,4 +242,4 @@ npm --prefix portal run test:e2e -- academy.spec.ts
 
 Live `npm --prefix portal run test:stack` checks use `STACK_URL` for the canonical HTTPS origin and `STACK_CA_CERT` for the trusted CA. When connecting directly to a gateway behind a public proxy, `STACK_CONNECT_ADDRESS` and `STACK_CONNECT_PORT` can select its IP and HTTPS port without changing the hostname, Host header, or TLS verification. Set `STACK_HTTP_URL` to the actual HTTP listener. These checks do not register live devices or upload collection data.
 
-Tests use isolated databases and real portal test sessions. Coverage includes JSON-only ingestion, normalized storage, duplicate uploads, rollback, ownership, fingerprint enrollment/approval/revocation, expiry, account binding, hashed storage, legacy-token retirement, filtering, administrator editing, revision conflicts, dark mode, and mobile layout. No live devices or production records are created by browser tests.
+Tests use isolated databases and real portal test sessions. Coverage includes JSON-only ingestion, normalized storage, duplicate uploads, rollback, ownership, identifier enrollment, one-time bearer provisioning, rotation/revocation, expiry, account binding, hashed storage, credential migration, filtering, administrator editing, revision conflicts, dark mode, and mobile layout. No live devices or production records are created by browser tests.

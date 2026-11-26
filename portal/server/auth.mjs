@@ -102,9 +102,10 @@ export async function registerAuth(server, { store, config, apps, webauthn = sim
     return reply.code(result.created ? 202 : 200).send({ device: deviceStatus(result.device) });
   });
 
-  server.post('/api/portal/integrations/ssacademy/devices/status', deviceRequestOptions, async (request) => ({
-    device: deviceStatus(store.getAcademyDeviceStatus(request.body.student, request.body.fingerprintToken)),
-  }));
+  server.post('/api/portal/integrations/ssacademy/devices/status', deviceRequestOptions, async (request) => {
+    const result = store.claimAcademyBearerToken(request.body.student, request.body.fingerprintToken);
+    return { device: deviceStatus(result.device), ...(result.bearerToken ? { bearerToken: result.bearerToken } : {}) };
+  });
 
   server.get('/api/portal/integrations/ssacademy/identity', { config: { rateLimit: { max: 300, timeWindow: '1 minute' } } }, async (request) => {
     let user = request.user;
@@ -124,7 +125,7 @@ export async function registerAuth(server, { store, config, apps, webauthn = sim
   });
 
   server.patch('/api/portal/integrations/ssacademy/tokens/:id', routeOptions(objectBody({ status: { enum: ['approved', 'revoked'] } }, ['status']), requireAdmin), async (request) => {
-    return { device: store.updateAcademyDevice(request.user.id, request.params.id, request.body.status) };
+    return store.updateAcademyDevice(request.user.id, request.params.id, request.body.status);
   });
 
   server.delete('/api/portal/integrations/ssacademy/tokens/:id', { preHandler: [requireOrigin, requireAdmin] }, async (request, reply) => {

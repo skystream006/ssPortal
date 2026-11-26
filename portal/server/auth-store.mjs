@@ -1,5 +1,5 @@
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { mkdirSync } from 'node:fs';
+import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
@@ -74,6 +74,35 @@ export function createAuthStore({ path = ':memory:', now = Date.now, sessionDays
     CREATE INDEX IF NOT EXISTS academy_devices_user ON academy_devices(user_id);
     CREATE INDEX IF NOT EXISTS academy_devices_username ON academy_devices(username_key);
   `);
+  const deviceColumns = database.prepare("SELECT name FROM pragma_table_info('academy_devices')").all();
+  if (!deviceColumns.some((column) => column.name === 'sync_token_hash')) {
+    database.exec('ALTER TABLE academy_devices ADD COLUMN sync_token_hash TEXT');
+  }
+  if (!deviceColumns.some((column) => column.name === 'sync_token_nonce')) {
+    database.exec('ALTER TABLE academy_devices ADD COLUMN sync_token_nonce TEXT');
+  }
+  database.exec('CREATE UNIQUE INDEX IF NOT EXISTS academy_devices_sync_token ON academy_devices(sync_token_hash) WHERE sync_token_hash IS NOT NULL');
+
+  let deliveryKey;
+  function getDeliveryKey() {
+    if (deliveryKey) return deliveryKey;
+    if (path === ':memory:') { deliveryKey = randomBytes(32); return deliveryKey; }
+    const keyPath = `${path}.sync-key`;
+    try { deliveryKey = readFileSync(keyPath); }
+    catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      if (database.prepare('SELECT 1 FROM academy_devices WHERE sync_token_nonce IS NOT NULL LIMIT 1').get()) {
+        throw new Error('The ssAcademy delivery key is missing. Restore the auth database sync-key file before delivering pending tokens.');
+      }
+      try { writeFileSync(keyPath, randomBytes(32), { flag: 'wx', mode: 0o600 }); }
+      catch (writeError) { if (writeError.code !== 'EEXIST') throw writeError; }
+      deliveryKey = readFileSync(keyPath);
+    }
+    if (deliveryKey.length !== 32) { deliveryKey = undefined; throw new Error('The ssAcademy delivery key is invalid. Restore the auth database sync-key file.'); }
+    return deliveryKey;
+  }
+
+  const deliveryToken = (id, nonce) => createHmac('sha256', getDeliveryKey()).update(`ssacademy:${id}:${nonce}`).digest('hex');
 
   function transaction(action) {
     database.exec('BEGIN IMMEDIATE');
@@ -197,7 +226,7 @@ export function createAuthStore({ path = ':memory:', now = Date.now, sessionDays
       if (role !== user.role || status !== user.status) {
         database.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId);
         database.prepare('DELETE FROM enrollment_tokens WHERE user_id = ?').run(userId);
-        database.prepare("UPDATE academy_devices SET status = 'revoked', updated_at = ? WHERE user_id = ?").run(now(), userId);
+        database.prepare("UPDATE academy_devices SET status = 'revoked', sync_token_hash = NULL, sync_token_nonce = NULL, updated_at = ? WHERE user_id = ?").run(now(), userId);
       }
       return getUser(userId);
     });
@@ -311,7 +340,7 @@ export function createAuthStore({ path = ':memory:', now = Date.now, sessionDays
       consumeEnrollmentCode(tokenHash, 'recovery', userId);
       database.prepare('DELETE FROM credentials WHERE user_id = ?').run(userId);
       database.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId);
-      database.prepare("UPDATE academy_devices SET status = 'revoked', updated_at = ? WHERE user_id = ?").run(now(), userId);
+      database.prepare("UPDATE academy_devices SET status = 'revoked', sync_token_hash = NULL, sync_token_nonce = NULL, updated_at = ? WHERE user_id = ?").run(now(), userId);
       insertCredential(userId, credential, name);
       return getUser(userId);
     });
@@ -324,6 +353,7 @@ export function createAuthStore({ path = ':memory:', now = Date.now, sessionDays
       id: record.id, student: record.username, userId: record.user_id,
       accountName: user?.name ?? null, accountStatus: user?.status ?? null,
       fingerprint: record.token_hash.slice(0, 16), status,
+      hasBearerToken: record.sync_token_hash !== null,
       createdAt: record.created_at, updatedAt: record.updated_at,
       approvedAt: record.approved_at, approvedBy: record.approved_by,
       expiresAt: record.expires_at, lastUsedAt: record.last_used_at,
@@ -361,6 +391,21 @@ export function createAuthStore({ path = ':memory:', now = Date.now, sessionDays
     return academyDevice(record);
   }
 
+  function claimAcademyBearerToken(student, fingerprintToken) {
+    const nameKey = normalizeName(student).toLowerCase();
+    const tokenHash = academyFingerprintHash(fingerprintToken);
+    return transaction(() => {
+      const record = database.prepare('SELECT * FROM academy_devices WHERE token_hash = ? AND username_key = ?').get(tokenHash, nameKey);
+      if (!record) throw authError(404, 'App registration not found.');
+      const device = academyDevice(record);
+      if (device.status !== 'approved' || !record.sync_token_nonce) return { device };
+      const bearerToken = deliveryToken(record.id, record.sync_token_nonce);
+      if (hashToken(bearerToken) !== record.sync_token_hash) throw new Error('The ssAcademy delivery key does not match the pending token.');
+      database.prepare('UPDATE academy_devices SET sync_token_nonce = NULL WHERE id = ?').run(record.id);
+      return { device, bearerToken };
+    });
+  }
+
   function listAcademyDevices(actorId, { status = '', search = '', page = 1, pageSize = 50 } = {}) {
     requireAdmin(actorId);
     const pageNumber = Number(page);
@@ -386,22 +431,23 @@ export function createAuthStore({ path = ':memory:', now = Date.now, sessionDays
       const record = database.prepare('SELECT * FROM academy_devices WHERE id = ?').get(id);
       if (!record) throw authError(404, 'App registration not found.');
       if (status === 'approved') {
-        if (record.status === 'approved' && record.expires_at > now()) return academyDevice(record);
+        const nonce = randomBytes(32).toString('hex');
+        const bearerToken = deliveryToken(id, nonce);
         const timestamp = now();
-        database.prepare(`UPDATE academy_devices SET status = 'approved', updated_at = ?, approved_at = ?, approved_by = ?, expires_at = ? WHERE id = ?`)
-          .run(timestamp, timestamp, actorId, timestamp + 90 * 86_400_000, id);
+        database.prepare(`UPDATE academy_devices SET status = 'approved', sync_token_hash = ?, sync_token_nonce = ?, updated_at = ?, approved_at = ?, approved_by = ?, expires_at = ? WHERE id = ?`)
+          .run(hashToken(bearerToken), nonce, timestamp, timestamp, actorId, timestamp + 90 * 86_400_000, id);
       } else {
-        database.prepare("UPDATE academy_devices SET status = 'revoked', updated_at = ? WHERE id = ?").run(now(), id);
+        database.prepare("UPDATE academy_devices SET status = 'revoked', sync_token_hash = NULL, sync_token_nonce = NULL, updated_at = ? WHERE id = ?").run(now(), id);
       }
-      return academyDevice(database.prepare('SELECT * FROM academy_devices WHERE id = ?').get(id));
+      const device = academyDevice(database.prepare('SELECT * FROM academy_devices WHERE id = ?').get(id));
+      return { device };
     });
   }
 
-  function getAcademyDeviceUser(fingerprintToken) {
-    let tokenHash;
-    try { tokenHash = academyFingerprintHash(fingerprintToken); } catch { return null; }
-    const record = database.prepare("SELECT id, user_id, username FROM academy_devices WHERE token_hash = ? AND status = 'approved' AND expires_at > ?")
-      .get(tokenHash, now());
+  function getAcademyDeviceUser(bearerToken) {
+    if (typeof bearerToken !== 'string' || !/^[A-Za-z0-9_-]{32,256}$/.test(bearerToken)) return null;
+    const record = database.prepare("SELECT id, user_id, username FROM academy_devices WHERE sync_token_hash = ? AND status = 'approved' AND expires_at > ?")
+      .get(hashToken(bearerToken), now());
     if (!record) return null;
     const user = record.user_id ? getUser(record.user_id) : null;
     database.prepare('UPDATE academy_devices SET last_used_at = ? WHERE id = ?').run(now(), record.id);
@@ -422,6 +468,6 @@ export function createAuthStore({ path = ':memory:', now = Date.now, sessionDays
     deleteSession: (token) => { if (typeof token === 'string') database.prepare('DELETE FROM sessions WHERE token_hash = ?').run(hashToken(token)); },
     revokeSessions: (actorId, userId) => { requireAdmin(actorId); requireApproved(userId); database.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId); },
     issueEnrollmentCode, checkEnrollmentCode, recoverAccount, rememberChallenge, takeChallenge,
-    registerAcademyDevice, getAcademyDeviceStatus, listAcademyDevices, updateAcademyDevice, getAcademyDeviceUser, deleteAcademyDevice,
+    registerAcademyDevice, getAcademyDeviceStatus, claimAcademyBearerToken, listAcademyDevices, updateAcademyDevice, getAcademyDeviceUser, deleteAcademyDevice,
   };
 }

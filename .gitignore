@@ -6,3 +6,4 @@
 backups/
 certificates/
 *.log
+*.sync-key

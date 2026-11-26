@@ -18,4 +18,5 @@ portal_apps/ssAcademy/data
 **/*.sqlite
 **/*.sqlite3
 **/*.db
+**/*.sync-key
 **/backups

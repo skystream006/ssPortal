@@ -248,12 +248,13 @@ async function loadTokens() {
       row.querySelector('[data-expires]').textContent = device.expiresAt ? formatDate(device.expiresAt) : 'Not approved';
       row.querySelector('[data-used]').textContent = device.lastUsedAt ? formatDate(device.lastUsedAt) : 'Never';
       const approve = row.querySelector('[data-approve]');
-      approve.hidden = device.status === 'approved';
-      approve.setAttribute('aria-label', `Approve ${device.student} (${device.fingerprint})`);
-      approve.title = 'Approve app';
-      approve.addEventListener('click', () => confirm('Approve app?', `${device.student} / ${device.fingerprint}`, 'Approve app', async () => {
+      const rotation = device.status === 'approved';
+      const label = rotation ? 'Generate bearer token' : 'Approve app';
+      approve.setAttribute('aria-label', `${rotation ? 'Generate bearer token for' : 'Approve'} ${device.student} (${device.fingerprint})`);
+      approve.title = label;
+      approve.addEventListener('click', () => confirm(rotation ? 'Generate new bearer token?' : 'Approve app?', `${device.student} / ${device.fingerprint}${rotation ? '. Any previous bearer token will stop working.' : ''}`, label, async () => {
         await api(`/tokens/${encodeURIComponent(device.id)}`, { method: 'PATCH', body: JSON.stringify({ status: 'approved' }) });
-        await loadTokens(); notice('App approved for uploads.');
+        await loadTokens(); notice('Sync token approved. The app will receive its bearer token once on its next status check.');
       }, false));
       const revoke = row.querySelector('[data-revoke]');
       revoke.hidden = device.status === 'revoked';
