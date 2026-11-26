@@ -33,11 +33,11 @@ The mobile app supplies a `username` and a persistent `fingerprintToken`. The se
 
 The username identifies a portal account; registration does not create or approve an account. The account must exist and be approved before the app can be approved. Compare the requesting app's fingerprint ID with the queue before granting access. The public fingerprint ID is the first 16 lowercase hexadecimal characters of SHA-256 over the exact UTF-8 token string; it is not the credential.
 
-`fingerprintToken` must be a **private, randomly generated per-installation secret**, persisted securely on the device and reused for retries and uploads. Generate at least 32 random bytes and encode them as hexadecimal or unpadded base64url. The API accepts 32-256 characters from `A-Z`, `a-z`, `0-9`, `_`, and `-`. Do not use a hardware ID, a publicly readable device fingerprint, a password, or biometric data. Approval is not hardware attestation: anyone possessing the secret can use its upload permission.
+`fingerprintToken` must be a **private, randomly generated per-installation secret**, persisted securely on the device and reused for retries, uploads, and downloads. Generate at least 32 random bytes and encode them as hexadecimal or unpadded base64url. The API accepts 32-256 characters from `A-Z`, `a-z`, `0-9`, `_`, and `-`. Do not use a hardware ID, a publicly readable device fingerprint, a password, or biometric data. Approval is not hardware attestation: anyone possessing the secret can use its upload and owned-import download permissions.
 
 Only SHA-256 token hashes are stored. Tokens are never returned by the API or displayed in the admin page. Approval lasts 90 days; an administrator can explicitly approve an expired or revoked registration again. There are at most 20 registrations per normalized username and 2000 total, including pending, expired, and revoked entries. Administrators can delete obsolete entries to free capacity.
 
-Approved tokens can **only upload** ssAcademy data. They cannot browse, edit, delete, manage tokens/users, or access other portal apps. Imports belong to the approved portal account ID, including after an account rename. Account revocation, role changes, deletion, or recovery invalidate linked devices; approving an account again does not revive its devices.
+Approved tokens can upload ssAcademy data and download an owned import by ID. They cannot list collections, browse the viewer, edit, delete, manage tokens/users, or access other portal apps. Downloads remain owner-scoped even for tokens linked to administrators. Imports belong to the approved portal account ID, including after an account rename. Account revocation, role changes, deletion, or recovery invalidate linked devices; approving an account again does not revive its devices.
 
 Protected API requests validate their session or token against the portal account service and fail closed if it is unavailable. Browser mutations require the exact configured portal origin. Mobile enrollment and status endpoints do not require a browser session or authorization header.
 
@@ -134,9 +134,15 @@ const receipt = await response.json();
 
 Use your actual HTTPS portal origin and trust its certificate. Do not disable TLS verification, publish tokens, or put them in public client code. The example environment variable contains the same device secret used for registration, not the public fingerprint ID. The Android app has not been changed to call this API automatically.
 
+## Download API
+
+`GET /ssacademy/api/imports/:id` accepts `Authorization: Bearer <same approved fingerprintToken>` without a browser-session cookie or `Origin` header. Use the import ID returned by an upload receipt. The response is `{ "import": ... }`, with the same current values and edit metadata returned to the browser; the response shape has not changed. Responses use `Cache-Control: no-store`.
+
+Tokens can download only imports owned by their approved portal account. Missing or other-owner imports return **404**, including for administrator-owned tokens. Missing, unapproved, revoked, or expired credentials return **401**; an unavailable portal account service returns **503**. The endpoint is not anonymous. Browser sessions continue to work with their existing owner/administrator access.
+
 ## Read and Admin API
 
-These endpoints require an approved portal browser-session cookie; upload tokens are rejected.
+These endpoints require an approved portal browser-session cookie, except the import detail/download route described above. Device tokens are rejected on the other routes.
 
 | Method and path | Purpose |
 | --- | --- |
@@ -144,7 +150,7 @@ These endpoints require an approved portal browser-session cookie; upload tokens
 | `GET /ssacademy/api/schema` | Format, version, reward catalog, and limits |
 | `GET /ssacademy/api/imports` | Own snapshots |
 | `GET /ssacademy/api/imports?scope=all` | Administrator-only all-owner list |
-| `GET /ssacademy/api/imports/:id` | Values and edit metadata; owner or admin |
+| `GET /ssacademy/api/imports/:id` | Values and edit metadata; browser owner/admin or approved owner device token |
 | `PATCH /ssacademy/api/imports/:id` | Administrator-only value editing |
 | `DELETE /ssacademy/api/imports/:id` | Delete an owned snapshot and its child records |
 | `GET /ssacademy/api/tokens` | Administrator-only app registration metadata, without secrets |

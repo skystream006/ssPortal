@@ -69,7 +69,8 @@ export async function buildApp({
       reply.header('Cache-Control', 'no-store');
       request.identity = await portal.identify(request.headers);
       const tokenUpload = request.method === 'POST' && request.routeOptions.url === `${base}/api/imports`;
-      if (request.identity.authType === 'device-token' && !tokenUpload) throw inputError('This app token can only upload ssAcademy exports.', 403);
+      const tokenDownload = ['GET', 'HEAD'].includes(request.method) && request.routeOptions.url === `${base}/api/imports/:id`;
+      if (request.identity.authType === 'device-token' && !tokenUpload && !tokenDownload) throw inputError('This app token can only upload or download owned ssAcademy exports.', 403);
       if (!['GET', 'HEAD'].includes(request.method) && request.identity.authType === 'session') requireOrigin(request);
     });
 
@@ -83,7 +84,9 @@ export async function buildApp({
       if (scope === 'all' && request.identity.user.role !== 'admin') throw inputError('Administrator access is required.', 403);
       return store.listImports(request.identity.user.id, filters, scope === 'all');
     });
-    routes.get('/imports/:id', async (request) => ({ import: store.getImport(request.identity.user.id, request.params.id, request.identity.user.role === 'admin') }));
+    routes.get('/imports/:id', async (request) => ({
+      import: store.getImport(request.identity.user.id, request.params.id, request.identity.authType === 'session' && request.identity.user.role === 'admin'),
+    }));
     routes.post('/imports', { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async (request, reply) => {
       if (request.headers['content-type']?.split(';')[0].trim().toLowerCase() !== 'application/json') throw inputError('Send export data as application/json, not an uploaded file.', 415);
       const result = store.importData(request.identity.user.id, request.body, request.identity.user.name);

@@ -92,7 +92,7 @@ This console-authorized step prevents a first visitor from claiming administrato
 - Sessions use random, server-side-hashed tokens in HttpOnly, SameSite=Strict cookies. HTTPS enables the Secure flag. They expire after `SESSION_DAYS` (30 by default).
 - Registration/login challenges are browser-bound, single-use, expire after five minutes, and require authenticator user verification. Mutation requests must match the configured origin; passkey endpoints are rate-limited.
 - The dashboard/API and every request under `/grocy/` and `/webtrees/` require an approved portal session. All approved portal users have access to those launch paths, but the apps' native accounts and permissions still apply. This is a shared access gate, **not application-account SSO**.
-- Grocy/webtrees native API keys alone do not bypass the gateway; their APIs also require a portal session cookie. ssAcademy separately supports upload-only tokens for its JSON ingestion endpoint, without granting access to the other apps or portal administration.
+- Grocy/webtrees native API keys alone do not bypass the gateway; their APIs also require a portal session cookie. ssAcademy separately supports approved device tokens for JSON uploads and downloading owned imports by ID, without granting access to the other apps or portal administration.
 - Revocation blocks subsequent requests; it does not erase previously rendered browser content or terminate requests/streams already in flight.
 
 ### Recovery
@@ -121,7 +121,7 @@ The HTTPS Compose override sets `PASSKEY_ORIGIN` to `https://<PASSKEY_RP_ID>`. W
 
 Open ssAcademy from Applications to import and view collection data exported by the Android app. Parsed balances and animation identifiers are stored as database rows, not export files. Members see their own imports; administrators can choose **All users** and **Edit values** to adjust reward balances and animation IDs with revision checks.
 
-For mobile uploads, the app registers its `username` and private per-installation `fingerprintToken` at `POST /ssacademy/api/devices/register`. An administrator approves the request in **ssAcademy > Upload tokens > App approvals**. The same token then authorizes upload-only requests for 90 days, with explicit revocation/reapproval. Tokens are hashed; no biometric data is used. The server no longer generates upload tokens, and legacy generated tokens must be replaced through registration and approval. Existing accounts and imported data are preserved.
+For mobile uploads, the app registers its `username` and private per-installation `fingerprintToken` at `POST /ssacademy/api/devices/register`. An administrator approves the request in **ssAcademy > Upload tokens > App approvals**. The same token then authorizes uploads and `GET /ssacademy/api/imports/:id` downloads of owned imports for 90 days, without a browser session and with explicit revocation/reapproval. Tokens are hashed; no biometric data is used. The server no longer generates upload tokens, and legacy generated tokens must be replaced through registration and approval. Existing accounts and imported data are preserved.
 
 The verified upstream export is `ssAcademy-collections` version 1, which contains rewards and collected animations, not practice history, reading progress, or PINs. Administration changes server records only; they are not pushed to Android devices. See [portal_apps/ssAcademy/README.md](portal_apps/ssAcademy/README.md) for the API request format, permissions, validation limits, and backup instructions.
 

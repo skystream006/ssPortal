@@ -39,7 +39,7 @@ test('JSON uploads become readable normalized records and duplicate retries are 
   } finally { await server.close(); }
 });
 
-test('upload tokens cannot read, delete, or manage tokens; session writes require the exact origin', async () => {
+test('device tokens cannot list collections, delete, or manage tokens; session writes require the exact origin', async () => {
   const server = await buildApp({ store: createStore(), portal, staticDir: false });
   try {
     assert.equal((await server.inject('/ssacademy/api/imports')).statusCode, 401);
@@ -52,6 +52,47 @@ test('upload tokens cannot read, delete, or manage tokens; session writes requir
     assert.equal((await server.inject({ method: 'DELETE', url: `/ssacademy/api/imports/${uploaded.json().import.id}`, headers: token })).statusCode, 403);
     assert.equal((await server.inject({ method: 'POST', url: '/ssacademy/api/imports', headers: { cookie: 'test-session', origin: 'https://evil.example' }, payload: data() })).statusCode, 403);
     assert.equal((await server.inject({ method: 'POST', url: '/ssacademy/api/imports', headers: { cookie: 'test-session' }, payload: data() })).statusCode, 403);
+  } finally { await server.close(); }
+});
+
+test('approved device tokens can download only their own imports without a browser session', async () => {
+  const store = createStore();
+  const own = store.importData('owner-a', data()).import;
+  const other = store.importData('owner-b', data()).import;
+  const administrator = store.importData('administrator', data()).import;
+  const server = await buildApp({
+    store, staticDir: false,
+    portal: {
+      ...portal,
+      async identify(headers) {
+        if (headers.authorization === 'Bearer rejected') throw inputError('App token is not approved.', 401);
+        if (headers.authorization === 'Bearer unavailable') throw inputError('Unavailable', 503);
+        const identity = await portal.identify(headers);
+        if (headers.authorization === 'Bearer administrator') identity.user = { id: 'administrator', role: 'admin' };
+        return identity;
+      },
+    },
+  });
+  try {
+    const url = `/ssacademy/api/imports/${own.id}`;
+    const token = { authorization: 'Bearer approved' };
+    const response = await server.inject({ url, headers: token });
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.json().import.id, own.id);
+    assert.equal(response.json().import.rewards[0].whole, 2);
+    assert.deepEqual(response.json().import.animations, ['PIKACHU']);
+    assert.equal(response.headers['cache-control'], 'no-store');
+    assert.equal((await server.inject({ method: 'HEAD', url, headers: token })).statusCode, 200);
+    assert.equal((await server.inject(url)).statusCode, 401);
+    assert.equal((await server.inject({ url, headers: { authorization: 'Bearer rejected' } })).statusCode, 401);
+    assert.equal((await server.inject({ url, headers: { authorization: 'Bearer unavailable' } })).statusCode, 503);
+    assert.equal((await server.inject({ url: `/ssacademy/api/imports/${other.id}`, headers: token })).statusCode, 404);
+    assert.equal((await server.inject({ url: '/ssacademy/api/imports/missing', headers: token })).statusCode, 404);
+    const adminToken = { authorization: 'Bearer administrator' };
+    assert.equal((await server.inject({ url: `/ssacademy/api/imports/${administrator.id}`, headers: adminToken })).statusCode, 200);
+    assert.equal((await server.inject({ url, headers: adminToken })).statusCode, 404);
+    assert.equal((await server.inject({ url, headers: { cookie: 'admin-session' } })).statusCode, 200);
+    assert.equal((await server.inject({ method: 'PATCH', url, headers: token, payload: { revision: 1, data: data().data } })).statusCode, 403);
   } finally { await server.close(); }
 });
 
