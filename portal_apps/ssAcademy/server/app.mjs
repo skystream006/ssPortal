@@ -103,7 +103,7 @@ export async function buildApp({
     });
     routes.delete('/imports/:id', async (request, reply) => {
       requireSession(request);
-      store.deleteImport(request.identity.user.id, request.params.id);
+      store.deleteImport(request.identity.user.id, request.params.id, request.identity.user.role === 'admin');
       return reply.code(204).send();
     });
     routes.get('/tokens', async (request) => {

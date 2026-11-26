@@ -39,6 +39,29 @@ test('JSON uploads become readable normalized records and duplicate retries are 
   } finally { await server.close(); }
 });
 
+test('admin sessions can delete other owners records without relaxing member, token, or origin restrictions', async () => {
+  const store = createStore();
+  const original = store.importData('owner-b', data()).import;
+  const server = await buildApp({ store, portal, staticDir: false });
+  const url = `/ssacademy/api/imports/${original.id}`;
+  const adminHeaders = { cookie: 'admin-session', origin };
+  try {
+    for (const headers of [
+      sessionHeaders,
+      { ...adminHeaders, authorization: 'Bearer admin-token' },
+      { ...adminHeaders, origin: 'https://evil.example' },
+      { cookie: 'admin-session' },
+    ]) {
+      assert.ok([403, 404].includes((await server.inject({ method: 'DELETE', url, headers })).statusCode));
+      assert.equal(store.getImport('owner-b', original.id).id, original.id);
+    }
+    assert.equal((await server.inject({ method: 'DELETE', url, headers: adminHeaders })).statusCode, 204);
+    assert.equal(store.listImports('administrator', {}, true).total, 0);
+    assert.equal((await server.inject({ url, headers: adminHeaders })).statusCode, 404);
+    assert.equal((await server.inject({ method: 'DELETE', url, headers: adminHeaders })).statusCode, 404);
+  } finally { await server.close(); }
+});
+
 test('device tokens cannot list collections, delete, or manage tokens; session writes require the exact origin', async () => {
   const server = await buildApp({ store: createStore(), portal, staticDir: false });
   try {

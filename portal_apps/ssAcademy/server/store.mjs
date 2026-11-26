@@ -153,8 +153,8 @@ export function createStore({ path = ':memory:', now = Date.now } = {}) {
     };
   }
 
-  function deleteImport(ownerId, id) {
-    if (database.prepare('DELETE FROM imports WHERE owner_id = ? AND id = ?').run(ownerId, id).changes !== 1) throw inputError('Import not found.', 404);
+  function deleteImport(ownerId, id, allowAll = false) {
+    if (database.prepare('DELETE FROM imports WHERE (owner_id = ? OR ? = 1) AND id = ?').run(ownerId, allowAll ? 1 : 0, id).changes !== 1) throw inputError('Import not found.', 404);
   }
 
   return { importData, updateImport, listImports, getImport, deleteImport, close: () => database.close() };

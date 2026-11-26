@@ -12,9 +12,10 @@ const exportData = {
   pokemons: ['PIKACHU', 'BULBASAUR'],
 };
 
-const test = portalTest.extend<{ academy: { origin: string; store: ReturnType<typeof createStore> } }>({
+const test = portalTest.extend<{ academy: { origin: string; store: ReturnType<typeof createStore>; clock: { now: number } } }>({
   academy: [async ({ portal, context }, use) => {
-    const store = createStore();
+    const clock = { now: Date.now() };
+    const store = createStore({ now: () => clock.now });
     const server = await buildApp({ store, portal: createPortalClient({ origin: portal.origin }) });
     try {
       const address = new URL(await server.listen({ host: '127.0.0.1', port: 0 }));
@@ -24,7 +25,7 @@ const test = portalTest.extend<{ academy: { origin: string; store: ReturnType<ty
         const response = await route.fetch({ url: new URL(path.pathname + path.search, address).href });
         await route.fulfill({ response });
       });
-      await use({ origin: address.origin, store });
+      await use({ origin: address.origin, store, clock });
     } finally { await server.close(); }
   }, { auto: true }],
 });
@@ -310,7 +311,13 @@ test('ssAcademy administrators edit another owner values without losing import i
   const detail = page.getByRole('dialog', { name: 'Student tablet', exact: true });
   await expect(detail.getByRole('table', { name: 'Synced app settings' })).toContainText('show_timer');
   await expect(detail.getByRole('table', { name: 'Synced app settings' })).toContainText('120');
-  await expect(detail.getByRole('button', { name: 'Delete import', exact: true })).not.toBeVisible();
+  await expect(detail.getByRole('button', { name: 'Delete import', exact: true })).toBeVisible();
+  await expect(page.getByRole('columnheader', { name: 'Last edited', exact: true })).toBeVisible();
+  const displayedDate = (value: number) => page.evaluate((timestamp) => new Date(timestamp).toLocaleString([], {
+    month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit',
+  }), value);
+  await expect(page.locator('#imports-body [data-date]')).toHaveText(await displayedDate(original.importedAt));
+  academy.clock.now += 86_400_000;
   await detail.getByRole('button', { name: 'Edit values', exact: true }).click();
   await detail.getByRole('spinbutton', { name: 'Lollipop whole', exact: true }).fill('12');
   await detail.getByRole('spinbutton', { name: 'Lollipop fragments', exact: true }).fill('1');
@@ -326,8 +333,18 @@ test('ssAcademy administrators edit another owner values without losing import i
   expect(restored.importedSha256).toBe(original.sha256);
   expect(restored.ownerId).toBe('learner-owner');
   expect(restored.settings).toEqual(settings);
+  await expect(page.locator('#imports-body [data-date]')).toHaveText(await displayedDate(restored.updatedAt));
   expect(academy.store.importData('learner-owner', { source: 'Student tablet', data: { ...exportData, settings } }).import.revision).toBe(2);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await detail.getByRole('button', { name: 'Delete import', exact: true }).click();
+  const confirmation = page.getByRole('dialog', { name: 'Delete imported data?', exact: true });
+  await confirmation.getByRole('button', { name: 'Cancel', exact: true }).click();
+  expect(academy.store.getImport('learner-owner', original.id).animations).toEqual(restored.animations);
+  await detail.getByRole('button', { name: 'Delete import', exact: true }).click();
+  await confirmation.getByRole('button', { name: 'Delete import', exact: true }).click();
+  await expect(detail).not.toBeVisible();
+  await expect(page.locator('#imports-body tr')).toHaveCount(0);
+  await expect(page.getByRole('status')).toContainText('database records deleted');
 });
 
 test('ssAcademy edit forms reject stale revisions instead of overwriting newer values', async ({ page, portal, academy }) => {

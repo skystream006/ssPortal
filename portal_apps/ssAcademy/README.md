@@ -25,7 +25,7 @@ Open **ssAcademy** from the portal. **Collections** provides search, source filt
 
 **Appearance settings** in the header offers the portal's seven color themes and Light, Dark, and System modes. Both apps use the same palettes and browser-local preference, with changes synchronized across open tabs. **Reset appearance** restores Green and System without changing other portal preferences.
 
-Members can view and delete their own imports. Administrators always see all owners' records, can open any collection, and choose **Edit values** to change whole/fragment balances and animation IDs. Source labels, owners, schema versions, and original import metadata are not editable. Deletion remains owner-scoped, including for administrators.
+Members can view and delete their own imports. Administrators always see all owners' records, can open or delete any collection, and choose **Edit values** to change whole/fragment balances and animation IDs. Source labels, owners, schema versions, and original import metadata are not editable. The list shows **Last edited**, using the import date for records that have not changed; administrative edits and changed device syncs update this timestamp.
 
 Import details display **Synced app settings** when present. Settings travel in the same owned upload/download as collections, including settings-only snapshots. Changes to supported Android preferences queue a sync; replacing a downloaded snapshot restores its settings, while merging collections preserves the device's local settings. Collection-only files and legacy server snapshots preserve local settings. The portal's reward/animation editor preserves saved settings; the settings table itself is read-only.
 
@@ -189,7 +189,7 @@ These endpoints require an approved portal browser-session cookie, except the im
 | `GET /ssacademy/api/imports?scope=all` | Administrator-only all-owner list |
 | `GET /ssacademy/api/imports/:id` | Values and edit metadata; browser owner/admin or approved owner device token |
 | `PATCH /ssacademy/api/imports/:id` | Administrator-only value editing |
-| `DELETE /ssacademy/api/imports/:id` | Delete an owned snapshot and its child records |
+| `DELETE /ssacademy/api/imports/:id` | Delete a snapshot and its child records; members must own it, administrators can delete any |
 | `GET /ssacademy/api/tokens` | Administrator-only app registration metadata, without secrets |
 | `PATCH /ssacademy/api/tokens/:id` | Administrator-only approval/rotation or revocation using `{ "status": "approved" }` or `{ "status": "revoked" }` |
 | `DELETE /ssacademy/api/tokens/:id` | Administrator-only registration deletion; immediately removes upload access |

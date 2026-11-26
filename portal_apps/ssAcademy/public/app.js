@@ -81,7 +81,7 @@ async function loadImports() {
       row.querySelector('[data-source]').textContent = record.source;
       row.querySelector('[data-owner]').textContent = record.ownerId === state.user.id ? 'You' : record.ownerName;
       row.querySelector('[data-owner]').hidden = !allUsers;
-      row.querySelector('[data-date]').textContent = formatDate(record.importedAt);
+      row.querySelector('[data-date]').textContent = formatDate(record.updatedAt ?? record.importedAt);
       row.querySelector('[data-whole]').textContent = number(record.whole);
       row.querySelector('[data-fragments]').textContent = number(record.fragments);
       row.querySelector('[data-animations]').textContent = number(record.animationCount);
@@ -149,7 +149,7 @@ function renderDetails(record) {
   byId('settings-empty').hidden = record.settings === undefined || Object.keys(record.settings).length > 0;
   byId('search-animations').value = '';
   byId('edit-values').hidden = state.user.role !== 'admin';
-  byId('delete-import').hidden = record.ownerId !== state.user.id;
+  byId('delete-import').hidden = record.ownerId !== state.user.id && state.user.role !== 'admin';
   byId('edit-saved').hidden = true;
   setEditMode(false);
   renderAnimations();
